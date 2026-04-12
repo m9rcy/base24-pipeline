@@ -20,8 +20,8 @@ public class MessageFilter {
                 default            -> false;
             };
 
-    @SuppressWarnings("unchecked")
-    public boolean shouldPublish(Base24Message message, Predicate<Base24Message>... predicates) {
+    @SafeVarargs
+    public final boolean shouldPublish(Base24Message message, Predicate<Base24Message>... predicates) {
         return predicates != null
                 && Arrays.stream(predicates).allMatch(predicate -> predicate != null && predicate.test(message));
     }
