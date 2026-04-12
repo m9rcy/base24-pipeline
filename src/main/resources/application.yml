@@ -1,0 +1,57 @@
+spring:
+  application:
+    name: base24-pipeline
+  # Prevent Spring Boot auto-configuring a default Kafka consumer factory
+  # that conflicts with our custom one
+  kafka:
+    bootstrap-servers: ${base24.kafka.bootstrap-servers}
+
+base24:
+  kafka:
+    bootstrap-servers: localhost:9092
+    topic: base24-eps-realtime
+    group-id: base24-consumer-group
+    key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+    value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+  services:
+    tokenisation-url: http://cards-tokenisation-service
+    transaction-url: http://transactions-service
+  crypto:
+    key-base64:
+    key:
+
+resilience4j:
+  circuitbreaker:
+    instances:
+      tokenisation:
+        sliding-window-size: 10
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 10s
+        permitted-calls-in-half-open-state: 3
+        register-health-indicator: true
+      transaction:
+        sliding-window-size: 10
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 10s
+        permitted-calls-in-half-open-state: 3
+        register-health-indicator: true
+
+  retry:
+    instances:
+      tokenisation:
+        max-attempts: 3
+        wait-duration: 500ms
+        exponential-backoff-multiplier: 2
+        retry-exceptions:
+          - com.commercial.cards.base24.exception.TokenisationException
+      transaction:
+        max-attempts: 3
+        wait-duration: 500ms
+        exponential-backoff-multiplier: 2
+        retry-exceptions:
+          - com.commercial.cards.base24.exception.TransactionSaveException
+
+logging:
+  level:
+    com.commercial.cards.base24: INFO
+    org.springframework.kafka: WARN

@@ -1,0 +1,11 @@
+# Override service URLs. Stubs make no HTTP calls so these are not used,
+# but must be present to satisfy @Value injection in adapters (which are
+# excluded by @Profile("!stub") anyway, so this is purely for documentation)
+base24:
+  services:
+    tokenisation-url: http://localhost:9001  # not called in stub mode
+    transaction-url: http://localhost:9002   # not called in stub mode
+
+logging:
+  level:
+    com.commercial.cards.base24: DEBUG  # show all [STUB] log lines
