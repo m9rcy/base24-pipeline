@@ -16,36 +16,54 @@ class MessageFilterTest {
     // No mocks, no Spring — pure unit test
     private final MessageFilter filter = new MessageFilter();
 
-    // ── isPtlfx ──────────────────────────────────────────────────────────────
+    // ── shouldPublish ───────────────────────────────────────────────────────
 
     @Test
     void shouldPassPtlfxRecords() {
-        assertTrue(filter.isPtlfx(messageWith(RecordType.PTLFX)));
+        assertTrue(filter.shouldPublish(messageWith(RecordType.PTLFX), MessageFilter.IS_PTLFX));
     }
 
     @Test
     void shouldRejectNonPtlfxRecords() {
-        assertFalse(filter.isPtlfx(messageWith(RecordType.OTHER)));
+        assertFalse(filter.shouldPublish(messageWith(RecordType.OTHER), MessageFilter.IS_PTLFX));
     }
 
     @Test
     void shouldRejectNullRecordType() {
         Base24Message msg = Base24Message.builder().recordType(null).build();
-        assertFalse(filter.isPtlfx(msg));
+        assertFalse(filter.shouldPublish(msg, MessageFilter.IS_PTLFX));
     }
-
-    // ── isActionable ─────────────────────────────────────────────────────────
 
     @ParameterizedTest
     @EnumSource(value = MessageType.class, names = {"TVN", "TCN", "ACN"})
     void shouldAllowActionableMessageTypes(MessageType type) {
-        assertTrue(filter.isActionable(messageWith(type)));
+        assertTrue(filter.shouldPublish(messageWith(type), MessageFilter.IS_ACTIONABLE));
     }
 
     @ParameterizedTest
     @EnumSource(value = MessageType.class, names = {"TAR", "UNKNOWN"})
     void shouldBlockNonActionableMessageTypes(MessageType type) {
-        assertFalse(filter.isActionable(messageWith(type)));
+        assertFalse(filter.shouldPublish(messageWith(type), MessageFilter.IS_ACTIONABLE));
+    }
+
+    @Test
+    void shouldPublishOnlyWhenAllPredicatesPass() {
+        Base24Message msg = Base24Message.builder()
+                .recordType(RecordType.PTLFX)
+                .messageType(MessageType.TVN)
+                .build();
+
+        assertTrue(filter.shouldPublish(msg, MessageFilter.IS_PTLFX, MessageFilter.IS_ACTIONABLE));
+    }
+
+    @Test
+    void shouldRejectWhenAnyPredicateFails() {
+        Base24Message msg = Base24Message.builder()
+                .recordType(RecordType.OTHER)
+                .messageType(MessageType.TVN)
+                .build();
+
+        assertFalse(filter.shouldPublish(msg, MessageFilter.IS_PTLFX, MessageFilter.IS_ACTIONABLE));
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────

@@ -50,13 +50,9 @@ public class Base24MessagePipeline {
         Base24Message message = parsed.get();
 
         // ── Stage 2: Filter ───────────────────────────────────────────────
-        if (!filter.isPtlfx(message)) {
-            log.debug("Skipping non-PTLFX record [type={}]", message.getRecordType());
-            return ProcessingResult.SKIPPED;
-        }
-
-        if (!filter.isActionable(message)) {
-            log.debug("Skipping non-actionable message type [msgType={}]", message.getMessageType());
+        if (!filter.shouldPublish(message, MessageFilter.IS_PTLFX, MessageFilter.IS_ACTIONABLE)) {
+            log.debug("Skipping non-publishable message [recordType={} msgType={}]",
+                    message.getRecordType(), message.getMessageType());
             return ProcessingResult.SKIPPED;
         }
 

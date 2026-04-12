@@ -5,24 +5,24 @@ import com.commercial.cards.base24.model.MessageType;
 import com.commercial.cards.base24.model.RecordType;
 import org.springframework.stereotype.Component;
 
+import java.util.Arrays;
+import java.util.function.Predicate;
+
 @Component
 public class MessageFilter {
 
-    /**
-     * Returns true only if this message is a PTLFX record type.
-     */
-    public boolean isPtlfx(Base24Message message) {
-        return RecordType.PTLFX == message.getRecordType();
-    }
+    public static final Predicate<Base24Message> IS_PTLFX =
+            message -> message != null && RecordType.PTLFX == message.getRecordType();
 
-    /**
-     * Returns true for message types we act on: TVN, TCN, ACN.
-     * TAR and UNKNOWN are not actionable and will be discarded.
-     */
-    public boolean isActionable(Base24Message message) {
-        return switch (message.getMessageType()) {
-            case TVN, TCN, ACN -> true;
-            default            -> false;
-        };
+    public static final Predicate<Base24Message> IS_ACTIONABLE =
+            message -> message != null && message.getMessageType() != null && switch (message.getMessageType()) {
+                case TVN, TCN, ACN -> true;
+                default            -> false;
+            };
+
+    @SuppressWarnings("unchecked")
+    public boolean shouldPublish(Base24Message message, Predicate<Base24Message>... predicates) {
+        return predicates != null
+                && Arrays.stream(predicates).allMatch(predicate -> predicate != null && predicate.test(message));
     }
 }

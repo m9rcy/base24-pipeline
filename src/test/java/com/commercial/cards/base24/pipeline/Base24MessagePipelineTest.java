@@ -59,7 +59,7 @@ class Base24MessagePipelineTest {
     void shouldSkipWhenRecordTypeIsNotPtlfx() {
         Base24Message msg = aMessage();
         when(parser.parse(any())).thenReturn(Optional.of(msg));
-        when(filter.isPtlfx(msg)).thenReturn(false);
+        whenShouldPublish(msg, false);
 
         ProcessingResult result = pipeline.process("<xml/>");
 
@@ -71,8 +71,7 @@ class Base24MessagePipelineTest {
     void shouldSkipWhenMessageTypeIsNotActionable() {
         Base24Message msg = aMessage();
         when(parser.parse(any())).thenReturn(Optional.of(msg));
-        when(filter.isPtlfx(msg)).thenReturn(true);
-        when(filter.isActionable(msg)).thenReturn(false);
+        whenShouldPublish(msg, false);
 
         ProcessingResult result = pipeline.process("<xml/>");
 
@@ -132,8 +131,7 @@ class Base24MessagePipelineTest {
                 .build();
 
         when(parser.parse(any())).thenReturn(Optional.of(msg));
-        when(filter.isPtlfx(msg)).thenReturn(true);
-        when(filter.isActionable(msg)).thenReturn(true);
+        whenShouldPublish(msg, true);
         when(tokenisationPort.tokenise(anyString())).thenReturn("TOK-STUB-1111");
 
         ProcessingResult result = pipeline.process("<xml/>");
@@ -160,8 +158,11 @@ class Base24MessagePipelineTest {
     private void setupPassingFilter() {
         Base24Message msg = aMessage();
         when(parser.parse(any())).thenReturn(Optional.of(msg));
-        when(filter.isPtlfx(msg)).thenReturn(true);
-        when(filter.isActionable(msg)).thenReturn(true);
+        whenShouldPublish(msg, true);
+    }
+
+    private void whenShouldPublish(Base24Message msg, boolean result) {
+        when(filter.shouldPublish(msg, MessageFilter.IS_PTLFX, MessageFilter.IS_ACTIONABLE)).thenReturn(result);
     }
 
     private Base24Message aMessage() {
