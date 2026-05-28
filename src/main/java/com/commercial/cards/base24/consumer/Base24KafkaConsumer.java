@@ -1,9 +1,11 @@
 package com.commercial.cards.base24.consumer;
 
-import com.commercial.cards.base24.model.ProcessingResult;
-import com.commercial.cards.base24.pipeline.Base24MessagePipeline;
-import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
+import com.commercial.cards.base24.dedupe.DeduplicationService;
+import com.commercial.cards.base24.exception.TokenisationException;
+import com.commercial.cards.base24.exception.TransactionSaveException;
+import com.commercial.cards.base24.model.Base24Message;
+import com.commercial.cards.base24.orchestration.EventMapper;
+import com.commercial.cards.base24.orchestration.EventOrchestrator;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.support.Acknowledgment;
@@ -15,38 +17,36 @@ import org.springframework.stereotype.Component;
  * <p>Responsibilities:</p>
  * <ul>
  *   <li>Receive raw XML string from the Base24 EPS topic</li>
- *   <li>Delegate all business logic to {@link Base24MessagePipeline}</li>
- *   <li>Own the ack/no-ack decision based on {@link ProcessingResult}</li>
+ *   <li>Delegate generic map/dedupe/orchestrate behavior to {@link AbstractKafkaConsumer}</li>
+ *   <li>Classify domain exceptions that should be retried by Kafka infrastructure</li>
  * </ul>
  *
  * <p>This class has zero knowledge of XML structure, PTLFX, PANs, or message types.</p>
  */
-@Slf4j
 @Component
-@RequiredArgsConstructor
-public class Base24KafkaConsumer {
+public class Base24KafkaConsumer extends AbstractKafkaConsumer<String, Base24Message> {
 
-    private final Base24MessagePipeline pipeline;
+    public Base24KafkaConsumer(
+            EventMapper<String, Base24Message> mapper,
+            DeduplicationService<Base24Message> deduplicationService,
+            EventOrchestrator<Base24Message> orchestrator
+    ) {
+        super(mapper, deduplicationService, orchestrator);
+    }
 
     @KafkaListener(
             topics                = "${base24.kafka.topic}",
             groupId               = "${base24.kafka.group-id}",
             containerFactory      = "base24KafkaListenerContainerFactory"
     )
+    @Override
     public void consume(ConsumerRecord<String, String> record, Acknowledgment ack) {
-        log.debug("Received message [topic={} partition={} offset={}]",
-                record.topic(), record.partition(), record.offset());
+        super.consume(record, ack);
+    }
 
-        ProcessingResult result = pipeline.process(record.value());
-
-        switch (result) {
-            case SUCCESS, SKIPPED -> {
-                ack.acknowledge();
-                log.debug("Acked [offset={} result={}]", record.offset(), result);
-            }
-            case RETRY -> log.warn(
-                    "Not acking — will redeliver [topic={} partition={} offset={}]",
-                    record.topic(), record.partition(), record.offset());
-        }
+    @Override
+    protected boolean isRetriableException(RuntimeException exception) {
+        return exception instanceof TokenisationException
+                || exception instanceof TransactionSaveException;
     }
 }

@@ -20,23 +20,70 @@ Kafka Topic → Parse XML → Filter PTLFX + TVN/TCN/ACN → Tokenise DPAN → S
 
 ---
 
-## Running Tests (no Kafka or real services needed)
+## Running Tests
 
 ```bash
 mvn test
 ```
 
-All tests are pure unit tests — no Spring context, no Kafka, no HTTP calls.
+Most tests are pure unit tests — no Spring context, no Kafka, no HTTP calls.
+PostgreSQL deduplication and Kafka end-to-end scenarios use Testcontainers and
+are skipped automatically when Docker is not available.
+
+### Testcontainers And Docker Desktop
+
+This project uses Testcontainers `2.0.5`. As of 2026-05-28, Maven Central and
+the Testcontainers Java release page list `2.0.5` as the latest version.
+
+Docker Desktop with Docker Engine 29 can fail with older Testcontainers versions.
+The practical 1.x floor reported by the community is `1.21.4`; the project now
+uses `2.0.5`, which also works with Docker Engine 29.
+
+On this workstation, `~/.testcontainers.properties` points at Docker Desktop's
+raw socket:
+
+```properties
+docker.host=unix:///Users/m9rcy/Library/Containers/com.docker.docker/Data/docker.raw.sock
+```
+
+That lets the JVM connect to Docker, but Ryuk then tries to mount
+`docker.raw.sock` into its cleanup container and Docker rejects the mount. The
+symptom is:
+
+```text
+error while creating mount source path '.../docker.raw.sock': operation not supported
+```
+
+Use this command when running Testcontainers tests locally:
+
+```bash
+TESTCONTAINERS_RYUK_DISABLED=true \
+TESTCONTAINERS_DOCKER_CLIENT_STRATEGY=org.testcontainers.dockerclient.EnvironmentAndSystemPropertyClientProviderStrategy \
+DOCKER_HOST=unix:///Users/m9rcy/.docker/run/docker.sock \
+TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE=/var/run/docker.sock \
+mvn test -q
+```
+
+References:
+
+- Testcontainers Java Docker Engine 29 issue: https://github.com/testcontainers/testcontainers-java/issues/11235
+- Docker forum note on Testcontainers 1.x and Docker 29: https://forums.docker.com/t/could-not-find-a-valid-docker-environment/151396/2
 
 | Test Class | What it covers |
 |---|---|
 | `MessageFilterTest` | PTLFX filter + TVN/TCN/ACN actionable rules |
 | `Base24XmlParserTest` | XML parsing, field mapping, error cases |
-| `Base24MessagePipelineTest` | All pipeline stage outcomes (skip/retry/success) |
-| `Base24KafkaConsumerTest` | Ack/no-ack decisions per ProcessingResult |
+| `AbstractKafkaConsumerTest` | Generic map/dedupe/orchestrate/ack outcomes |
+| `ProcessorRoutingOrchestratorTest` | Single/multi processor routing with a made-up consumer event |
+| `TokeniseAndSaveTransactionProcessorTest` | Tokenise + save processor behavior |
+| `FingerprintHasherTest` | Stable SHA/HMAC hashing |
+| `JdbcDeduplicationServiceTest` | PostgreSQL dedupe, stale event handling, hash changes |
+| `Base24KafkaConsumerTest` | Topic-specific consumer retry classification |
 | `TokenisationAdapterTest` | HTTP adapter with MockRestServiceServer |
 | `TransactionAdapterTest` | HTTP adapter with MockRestServiceServer |
 | `StubPipelineSmokeTest` | Full pipeline wired with real stubs (no mocks) |
+| `AbstractKafkaIntegrationTest` | Shared Testcontainers Kafka, MockServer, topic, publish, DLQ, and offset helpers |
+| `Base24KafkaIntegrationTest` | Kafka + HTTP end-to-end behavior with Testcontainers |
 
 ---
 
@@ -47,7 +94,7 @@ mvn spring-boot:run -Dspring-boot.run.profiles=stub
 ```
 
 Stubs log every tokenisation and save event at DEBUG level so you can see
-the full pipeline processing messages.
+the full consumer processing flow.
 
 To send a test message, use the Kafka console producer:
 
@@ -221,7 +268,7 @@ properties.
 
 ## Running With Docker Compose
 
-Build and start Kafka plus the pipeline in stub mode:
+Build and start Kafka, PostgreSQL, and the pipeline in stub mode:
 
 ```bash
 docker compose up --build
@@ -237,7 +284,8 @@ docker compose exec kafka /opt/kafka/bin/kafka-console-producer.sh \
 
 Then paste the sample XML above. The app runs with `SPRING_PROFILES_ACTIVE=stub`,
 so tokenisation and transaction saving are handled by local stubs and no external
-HTTP services are required.
+HTTP services are required. Database deduplication is enabled in this compose
+file and uses the local `postgres` service.
 
 Stop everything with:
 
@@ -260,6 +308,14 @@ base24:
   services:
     tokenisation-url: http://cards-tokenisation-service
     transaction-url:  http://transactions-service
+  dedupe:
+    enabled: true
+    hmac-secret: your-secret
+spring:
+  datasource:
+    url: jdbc:postgresql://your-postgres-host:5432/base24
+    username: your-user
+    password: your-password
 ```
 
 Then run:
@@ -276,7 +332,6 @@ mvn spring-boot:run
 src/main/java/com/commercial/cards/base24/
 ├── Base24PipelineApplication.java
 ├── model/
-│   ├── ProcessingResult.java     ← SUCCESS | SKIPPED | RETRY
 │   ├── MessageType.java          ← TAR | TVN | TCN | ACN | UNKNOWN
 │   ├── RecordType.java           ← PTLFX | OTHER
 │   ├── Base24Message.java        ← domain model (pure data)
@@ -292,10 +347,31 @@ src/main/java/com/commercial/cards/base24/
 ├── parser/
 │   └── Base24XmlParser.java
 ├── pipeline/
-│   ├── MessageFilter.java
-│   └── Base24MessagePipeline.java
+│   └── MessageFilter.java
+├── mapper/
+│   └── Base24EventMapper.java
+├── orchestrator/
+│   └── Base24TransactionOrchestrator.java
+├── processor/
+│   └── TokeniseAndSaveTransactionProcessor.java
+├── orchestration/                  ← generic mapper/orchestrator/processor contracts
+│   ├── EventMapper.java
+│   ├── EventOrchestrator.java
+│   ├── EventProcessor.java
+│   ├── BaseProcessor.java
+│   ├── ProcessorRoutingMode.java
+│   └── ProcessorRoutingOrchestrator.java
+├── dedupe/                         ← no-op + PostgreSQL-backed dedupe
+│   ├── DeduplicationService.java
+│   ├── NoOpDeduplicationService.java
+│   ├── JdbcDeduplicationService.java
+│   ├── EventFingerprint.java
+│   ├── FingerprintHasher.java
+│   └── Base24EventFingerprint.java
 ├── consumer/
-│   └── Base24KafkaConsumer.java
+│   ├── AbstractKafkaConsumer.java   ← generic consume/map/dedupe/orchestrate flow
+│   ├── Base24KafkaConsumer.java
+│   └── KafkaProcessingRetryException.java
 ├── adapter/                      ← @Profile("!stub") — real HTTP + CB + Retry
 │   ├── TokenisationAdapter.java
 │   └── TransactionAdapter.java
@@ -304,8 +380,113 @@ src/main/java/com/commercial/cards/base24/
 │   └── TransactionStub.java
 └── config/
     ├── KafkaConfig.java
-    └── RestClientConfig.java
+    ├── RestClientConfig.java
+    ├── DeduplicationConfig.java
+    └── DedupeDataSourceConfig.java
 ```
+
+---
+
+## Adding A New Kafka Consumer
+
+The consumer architecture is intentionally split so new topics do not copy the
+Base24 processing pipeline.
+
+To add a new consumer:
+
+1. Create a DTO/domain object for the new topic's payload.
+2. Implement `EventMapper<I, D>` to map the raw Kafka value into that DTO. Return
+   `Optional.empty()` for malformed or unsupported input that should be skipped.
+3. Implement `DeduplicationService<D>` if the consumer needs domain-specific
+   duplicate detection. For PostgreSQL-backed dedupe, provide an
+   `EventFingerprint<D>` that exposes the domain, dedupe key, event time, and
+   interesting fields used for hashing.
+4. Implement one or more `EventProcessor<D>` classes. Extend `BaseProcessor<D>`
+   when the processor needs a local `shouldProcess(dto)` filter.
+5. Add an `EventOrchestrator<D>`. Prefer `ProcessorRoutingOrchestrator<D>` when
+   routing can be expressed as one or more processors selected by
+   `shouldProcess(dto)`.
+6. Add a concrete Kafka consumer that extends `AbstractKafkaConsumer<I, D>`.
+   The class should only bind `@KafkaListener` properties and classify retryable
+   domain exceptions in `isRetriableException`.
+7. Add configuration properties for the topic, group id, retry settings, DLQ
+   topic, downstream URLs, and dedupe settings.
+8. Add unit tests for mapper, dedupe fingerprint, processors, orchestrator, and
+   concrete retry classification.
+9. Add a Kafka integration test that extends `AbstractKafkaIntegrationTest`.
+   Reuse `newScenario(...)`, `startApplication(...)`, `publish(...)`,
+   `consumeOne(...)`, and `committedOffset(...)` instead of duplicating Kafka
+   setup code.
+
+The shared consumer flow is:
+
+```text
+Kafka record -> mapper -> optional orchestrator pre-filter -> dedupe isConsumable -> orchestrator -> markProcessed -> ack
+```
+
+`AbstractKafkaConsumer` also owns trace setup. It reads `trace-id` or `traceId`
+from Kafka headers when present; otherwise it generates a UUID. After mapping,
+a concrete consumer can override `traceId(dto)` to use a trace ID carried inside
+the event DTO. The trace ID is stored in MDC under `trace-id`, included in logs,
+and copied by the shared `RestClient` into outgoing HTTP requests as the
+`trace-id` header.
+
+Retry is exception-driven. Concrete consumers decide which exceptions are
+retryable; retryable failures are wrapped in `KafkaProcessingRetryException` and
+handled by Spring Kafka's `DefaultErrorHandler`. After retries are exhausted,
+the handler publishes to the configured DLQ and commits the recovered offset.
+
+---
+
+## Deduplication
+
+Deduplication is disabled by default:
+
+```yaml
+base24:
+  dedupe:
+    enabled: false
+```
+
+When enabled, the app uses PostgreSQL table `event_deduplication` keyed by:
+
+```text
+domain + dedupe_key
+```
+
+For Base24 transactions:
+
+```text
+domain = base24-transaction
+dedupe_key = transactionId
+```
+
+The stored hash is computed from the domain-relevant fingerprint:
+
+```text
+messageType
+recordType
+transactionId
+digitalPan
+amount
+currencyCode
+responseCode
+```
+
+`timestamp` is not part of the hash. It is used only for event ordering:
+
+```text
+older timestamp than stored last_event_time -> skipped as stale
+same hash with newer timestamp -> skipped and last_event_time is advanced
+changed hash with newer timestamp -> processed
+```
+
+If `base24.dedupe.hmac-secret` is set, fingerprints are hashed with HMAC-SHA256.
+Otherwise they use SHA-256.
+
+For multi-instance deployments, producers should set the Kafka message key to
+the dedupe key, usually `transactionId`, so all events for the same transaction
+stay on the same Kafka partition.
 
 ---
 
@@ -321,9 +502,22 @@ Both adapters use Resilience4j with the following defaults (configure in `applic
 | Retry attempts | 3 |
 | Retry backoff | 500ms, exponential ×2 |
 
-When the circuit is open or retries are exhausted, the fallback re-throws so the
-pipeline returns `RETRY` and Kafka does **not** commit the offset — the message
-will be redelivered when the downstream service recovers.
+When the circuit is open or retries are exhausted, the adapter throws a domain
+exception. The abstract Kafka consumer asks the concrete consumer whether that
+exception is retryable; Base24 currently retries tokenisation and transaction
+save failures. Retryable exceptions are wrapped in `KafkaProcessingRetryException`
+and handled by Spring Kafka's `DefaultErrorHandler`.
+
+Kafka retry defaults:
+
+| Setting | Value |
+|---|---|
+| Retry interval | 1000ms |
+| Retry attempts | 3 |
+
+After retry exhaustion, the current handler logs the exhausted record and
+publishes it to a DLQ. If `base24.kafka.dlq-topic` is blank, the default DLQ
+topic is the source topic plus `.DLQ`.
 
 ---
 

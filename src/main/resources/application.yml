@@ -13,12 +13,22 @@ base24:
     group-id: base24-consumer-group
     key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
     value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+    retry:
+      interval-ms: 1000
+      max-attempts: 3
+    dlq-topic:
   services:
     tokenisation-url: http://cards-tokenisation-service
     transaction-url: http://transactions-service
   crypto:
     key-base64:
     key:
+  orchestration:
+    processor-routing-mode: single-match
+  dedupe:
+    enabled: false
+    initialize-schema: true
+    hmac-secret:
 
 resilience4j:
   circuitbreaker:
@@ -52,6 +62,8 @@ resilience4j:
           - com.commercial.cards.base24.exception.TransactionSaveException
 
 logging:
+  pattern:
+    level: "%5p [trace-id:%X{trace-id:-}]"
   level:
     com.commercial.cards.base24: INFO
     org.springframework.kafka: WARN

@@ -23,11 +23,28 @@ services:
       timeout: 5s
       retries: 12
 
+  postgres:
+    image: postgres:16-alpine
+    container_name: base24-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: base24
+      POSTGRES_USER: base24
+      POSTGRES_PASSWORD: base24
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U base24 -d base24 >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
   base24-pipeline:
     build: .
     container_name: base24-pipeline
     depends_on:
       kafka:
+        condition: service_healthy
+      postgres:
         condition: service_healthy
     ports:
       - "8080:8080"
@@ -36,3 +53,8 @@ services:
       BASE24_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       BASE24_KAFKA_TOPIC: base24-eps-realtime
       BASE24_KAFKA_GROUP_ID: base24-consumer-group
+      BASE24_DEDUPE_ENABLED: "true"
+      BASE24_DEDUPE_HMAC_SECRET: local-dedupe-secret
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/base24
+      SPRING_DATASOURCE_USERNAME: base24
+      SPRING_DATASOURCE_PASSWORD: base24

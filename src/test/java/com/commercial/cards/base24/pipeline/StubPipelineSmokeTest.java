@@ -1,24 +1,29 @@
 package com.commercial.cards.base24.pipeline;
 
-import com.commercial.cards.base24.dto.SaveTransactionRequest;
+import com.commercial.cards.base24.consumer.Base24KafkaConsumer;
+import com.commercial.cards.base24.dedupe.NoOpDeduplicationService;
+import com.commercial.cards.base24.mapper.Base24EventMapper;
 import com.commercial.cards.base24.model.Base24Message;
 import com.commercial.cards.base24.model.MessageType;
-import com.commercial.cards.base24.model.ProcessingResult;
 import com.commercial.cards.base24.model.RecordType;
+import com.commercial.cards.base24.orchestrator.Base24TransactionOrchestrator;
+import com.commercial.cards.base24.processor.TokeniseAndSaveTransactionProcessor;
 import com.commercial.cards.base24.stub.TokenisationStub;
 import com.commercial.cards.base24.stub.TransactionStub;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.junit.jupiter.api.Test;
+import org.springframework.kafka.support.Acknowledgment;
 
 import java.math.BigDecimal;
+import java.util.List;
 import java.util.Optional;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
 /**
  * Integration-style smoke test for the stub profile.
- * Wires the real stubs into the pipeline to verify the full flow
+ * Wires the real stubs into the consumer flow to verify the full flow
  * without any Spring context or real HTTP calls.
  */
 class StubPipelineSmokeTest {
@@ -43,13 +48,17 @@ class StubPipelineSmokeTest {
 
         when(parser.parse(any())).thenReturn(Optional.of(message));
 
-        var pipeline = new Base24MessagePipeline(parser, filter, tokenisation, transaction);
+        var processor = new TokeniseAndSaveTransactionProcessor(tokenisation, transaction);
+        var orchestrator = new Base24TransactionOrchestrator(filter, List.of(processor), "single-match");
+        var consumer = new Base24KafkaConsumer(
+                new Base24EventMapper(parser),
+                new NoOpDeduplicationService<>(),
+                orchestrator);
+        Acknowledgment ack = mock(Acknowledgment.class);
 
-        // Act
-        ProcessingResult result = pipeline.process("<xml/>");
+        consumer.consume(aRecord("<xml/>"), ack);
 
-        // Assert
-        assertEquals(ProcessingResult.SUCCESS, result);
+        verify(ack).acknowledge();
     }
 
     @Test
@@ -68,8 +77,20 @@ class StubPipelineSmokeTest {
 
         when(parser.parse(any())).thenReturn(Optional.of(tarMessage));
 
-        var pipeline = new Base24MessagePipeline(parser, filter, tokenisation, transaction);
+        var processor = new TokeniseAndSaveTransactionProcessor(tokenisation, transaction);
+        var orchestrator = new Base24TransactionOrchestrator(filter, List.of(processor), "single-match");
+        var consumer = new Base24KafkaConsumer(
+                new Base24EventMapper(parser),
+                new NoOpDeduplicationService<>(),
+                orchestrator);
+        Acknowledgment ack = mock(Acknowledgment.class);
 
-        assertEquals(ProcessingResult.SKIPPED, pipeline.process("<xml/>"));
+        consumer.consume(aRecord("<xml/>"), ack);
+
+        verify(ack).acknowledge();
+    }
+
+    private ConsumerRecord<String, String> aRecord(String value) {
+        return new ConsumerRecord<>("base24-eps-realtime", 0, 100L, "TXN-001", value);
     }
 }
