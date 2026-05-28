@@ -8,6 +8,9 @@ import org.springframework.http.MediaType;
 import org.springframework.test.web.client.MockRestServiceServer;
 import org.springframework.web.client.RestClient;
 
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
+
 import static org.junit.jupiter.api.Assertions.*;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.*;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.*;
@@ -65,5 +68,54 @@ class TokenisationAdapterTest {
 
         assertThrows(Exception.class,
                 () -> adapter.tokenise("4111111111111111"));
+    }
+
+    @Test
+    void shouldThrowTokenisationExceptionWhenResponseBodyIsNull() {
+        // JSON "null" deserializes to a null Java reference
+        mockServer.expect(requestTo("http://cards-tokenisation-service/cards/tokenise"))
+                .andRespond(withSuccess("null", MediaType.APPLICATION_JSON));
+
+        assertThrows(TokenisationException.class,
+                () -> adapter.tokenise("4111111111111111"));
+    }
+
+    @Test
+    void shouldMaskNullPanInLogBeforeCallingService() {
+        mockServer.expect(requestTo("http://cards-tokenisation-service/cards/tokenise"))
+                .andRespond(withSuccess("{\"tokenisedPan\":\"TOK-STUB\"}", MediaType.APPLICATION_JSON));
+
+        // null PAN hits the `pan == null` branch in maskPan; the HTTP call still proceeds
+        assertEquals("TOK-STUB", adapter.tokenise(null));
+        mockServer.verify();
+    }
+
+    @Test
+    void shouldMaskShortPanInLogBeforeCallingService() {
+        mockServer.expect(requestTo("http://cards-tokenisation-service/cards/tokenise"))
+                .andRespond(withSuccess("{\"tokenisedPan\":\"TOK-STUB\"}", MediaType.APPLICATION_JSON));
+
+        // PAN shorter than 4 chars hits the `length < 4` branch in maskPan
+        assertEquals("TOK-STUB", adapter.tokenise("123"));
+        mockServer.verify();
+    }
+
+    @Test
+    void shouldWrapCauseInTokenisationExceptionFromFallback() throws Exception {
+        Method fallback = TokenisationAdapter.class
+                .getDeclaredMethod("tokeniseFallback", String.class, Exception.class);
+        fallback.setAccessible(true);
+
+        RuntimeException cause = new RuntimeException("circuit open");
+        TokenisationException thrown = assertThrows(TokenisationException.class, () -> {
+            try {
+                fallback.invoke(adapter, "4111111111111111", cause);
+            } catch (InvocationTargetException e) {
+                throw (RuntimeException) e.getCause();
+            }
+        });
+
+        assertEquals("Tokenisation unavailable", thrown.getMessage());
+        assertSame(cause, thrown.getCause());
     }
 }

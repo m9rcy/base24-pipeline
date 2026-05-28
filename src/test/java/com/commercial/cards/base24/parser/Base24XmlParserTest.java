@@ -118,6 +118,78 @@ class Base24XmlParserTest {
     }
 
     @Test
+    void shouldDefaultAmountToNullWhenValueIsNotNumeric() {
+        String xml = """
+                <Data>
+                    <MessageType>TVN</MessageType>
+                    <RecordType>PTLFX</RecordType>
+                    <TransactionId>TXN-004</TransactionId>
+                    <DigitalPan>4111111111111111</DigitalPan>
+                    <Amount>not-a-number</Amount>
+                </Data>
+                """;
+
+        Optional<Base24Message> result = parser.parse(xml);
+
+        assertTrue(result.isPresent());
+        assertNull(result.get().getAmount());
+    }
+
+    @Test
+    void shouldDefaultTimestampToNullWhenValueIsInvalidFormat() {
+        String xml = """
+                <Data>
+                    <MessageType>TVN</MessageType>
+                    <RecordType>PTLFX</RecordType>
+                    <TransactionId>TXN-005</TransactionId>
+                    <DigitalPan>4111111111111111</DigitalPan>
+                    <Timestamp>not-a-date</Timestamp>
+                </Data>
+                """;
+
+        Optional<Base24Message> result = parser.parse(xml);
+
+        assertTrue(result.isPresent());
+        assertNull(result.get().getTimestamp());
+    }
+
+    @Test
+    void shouldDefaultAmountToNullWhenValueIsBlankWhitespace() {
+        String xml = """
+                <Data>
+                    <MessageType>TVN</MessageType>
+                    <RecordType>PTLFX</RecordType>
+                    <TransactionId>TXN-006</TransactionId>
+                    <DigitalPan>4111111111111111</DigitalPan>
+                    <Amount>   </Amount>
+                </Data>
+                """;
+
+        Optional<Base24Message> result = parser.parse(xml);
+
+        assertTrue(result.isPresent());
+        assertNull(result.get().getAmount());
+    }
+
+    @Test
+    void shouldDefaultTimestampToNullWhenValueIsBlankWhitespace() {
+        String xml = """
+                <Data>
+                    <MessageType>TVN</MessageType>
+                    <RecordType>PTLFX</RecordType>
+                    <TransactionId>TXN-007</TransactionId>
+                    <DigitalPan>4111111111111111</DigitalPan>
+                    <Timestamp>   </Timestamp>
+                </Data>
+                """;
+
+        Optional<Base24Message> result = parser.parse(xml);
+
+        assertTrue(result.isPresent());
+        assertNull(result.get().getTimestamp());
+    }
+
+    @Test
     void shouldHandleMissingOptionalFieldsGracefully() {
         // Amount and Timestamp are optional — should not throw
         String xml = """

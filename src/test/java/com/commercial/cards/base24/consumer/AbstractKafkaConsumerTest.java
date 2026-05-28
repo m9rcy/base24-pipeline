@@ -146,6 +146,52 @@ class AbstractKafkaConsumerTest {
     }
 
     @Test
+    void shouldGenerateTraceIdWhenHeaderValueBytesAreNull() {
+        Base24Message msg = setupPassingDedupe();
+        ConsumerRecord<String, String> record = aRecord("<xml/>");
+        // Header present but with null value bytes — must not NPE, must fall back to UUID
+        record.headers().add(AbstractKafkaConsumer.TRACE_ID_MDC_KEY, null);
+        doAnswer(invocation -> {
+            assertNotNull(MDC.get(AbstractKafkaConsumer.TRACE_ID_MDC_KEY));
+            return null;
+        }).when(orchestrator).orchestrate(msg);
+
+        consumer.consume(record, ack);
+
+        verify(ack).acknowledge();
+    }
+
+    @Test
+    void shouldGenerateTraceIdWhenHeaderValueBytesAreEmpty() {
+        Base24Message msg = setupPassingDedupe();
+        ConsumerRecord<String, String> record = aRecord("<xml/>");
+        record.headers().add(AbstractKafkaConsumer.TRACE_ID_MDC_KEY, new byte[0]);
+        doAnswer(invocation -> {
+            assertNotNull(MDC.get(AbstractKafkaConsumer.TRACE_ID_MDC_KEY));
+            return null;
+        }).when(orchestrator).orchestrate(msg);
+
+        consumer.consume(record, ack);
+
+        verify(ack).acknowledge();
+    }
+
+    @Test
+    void shouldGenerateTraceIdWhenHeaderValueIsWhitespaceOnly() {
+        Base24Message msg = setupPassingDedupe();
+        ConsumerRecord<String, String> record = aRecord("<xml/>");
+        record.headers().add(AbstractKafkaConsumer.TRACE_ID_MDC_KEY, "   ".getBytes(StandardCharsets.UTF_8));
+        doAnswer(invocation -> {
+            assertNotNull(MDC.get(AbstractKafkaConsumer.TRACE_ID_MDC_KEY));
+            return null;
+        }).when(orchestrator).orchestrate(msg);
+
+        consumer.consume(record, ack);
+
+        verify(ack).acknowledge();
+    }
+
+    @Test
     void shouldUseTraceIdFromDtoWhenConsumerExtractsIt() {
         Base24Message msg = setupPassingDedupe();
         consumer = new TraceAwareKafkaConsumer(mapper, deduplicationService, orchestrator);

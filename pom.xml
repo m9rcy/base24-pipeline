@@ -182,6 +182,39 @@
                 <artifactId>exec-maven-plugin</artifactId>
                 <version>3.5.0</version>
             </plugin>
+
+            <plugin>
+                <groupId>org.jacoco</groupId>
+                <artifactId>jacoco-maven-plugin</artifactId>
+                <version>0.8.13</version>
+                <configuration>
+                    <!-- Only instrument our classes — avoids instrumentation failures
+                         on JDK/third-party classes compiled for newer Java bytecode versions -->
+                    <includes>
+                        <include>com/commercial/cards/**/*.class</include>
+                    </includes>
+                    <excludes>
+                        <!-- Entry point and standalone tool — not pipeline components -->
+                        <exclude>**/Base24PipelineApplication.class</exclude>
+                        <exclude>**/FolderKafkaPublisher*.class</exclude>
+                    </excludes>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>prepare-agent</id>
+                        <goals>
+                            <goal>prepare-agent</goal>
+                        </goals>
+                    </execution>
+                    <execution>
+                        <id>report</id>
+                        <phase>verify</phase>
+                        <goals>
+                            <goal>report</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
         </plugins>
     </build>
 </project>

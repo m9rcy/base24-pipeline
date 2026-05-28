@@ -2,6 +2,7 @@ package com.commercial.cards.base24.consumer;
 
 import com.commercial.cards.base24.dedupe.DeduplicationService;
 import com.commercial.cards.base24.exception.TokenisationException;
+import com.commercial.cards.base24.exception.TransactionSaveException;
 import com.commercial.cards.base24.model.Base24Message;
 import com.commercial.cards.base24.orchestration.EventMapper;
 import com.commercial.cards.base24.orchestration.EventOrchestrator;
@@ -12,6 +13,7 @@ import org.springframework.kafka.support.Acknowledgment;
 
 import java.util.Optional;
 
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
@@ -64,6 +66,34 @@ class Base24KafkaConsumerTest {
 
         assertThrows(KafkaProcessingRetryException.class, () -> consumer.consume(aRecord("<xml/>"), ack));
 
+        verify(ack, never()).acknowledge();
+    }
+
+    @Test
+    void shouldThrowRetryExceptionForTransactionSaveException() {
+        Base24Message message = aMessage();
+        when(mapper.map(any())).thenReturn(Optional.of(message));
+        when(orchestrator.shouldOrchestrate(message)).thenReturn(true);
+        when(deduplicationService.isConsumable(message)).thenReturn(true);
+        doThrow(new TransactionSaveException("db timeout")).when(orchestrator).orchestrate(message);
+
+        assertThrows(KafkaProcessingRetryException.class, () -> consumer.consume(aRecord("<xml/>"), ack));
+
+        verify(ack, never()).acknowledge();
+    }
+
+    @Test
+    void shouldRethrowNonRetriableExceptionDirectly() {
+        Base24Message message = aMessage();
+        when(mapper.map(any())).thenReturn(Optional.of(message));
+        when(orchestrator.shouldOrchestrate(message)).thenReturn(true);
+        when(deduplicationService.isConsumable(message)).thenReturn(true);
+        RuntimeException nonRetriable = new IllegalStateException("unexpected state");
+        doThrow(nonRetriable).when(orchestrator).orchestrate(message);
+
+        IllegalStateException thrown = assertThrows(IllegalStateException.class,
+                () -> consumer.consume(aRecord("<xml/>"), ack));
+        assertSame(nonRetriable, thrown);
         verify(ack, never()).acknowledge();
     }
 

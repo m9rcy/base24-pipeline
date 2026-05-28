@@ -7,7 +7,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
-@Component
+@Component("base24DeduplicationService")
 @ConditionalOnProperty(prefix = "base24.dedupe", name = "enabled", havingValue = "true")
 public class Base24JdbcDeduplicationService extends JdbcDeduplicationService<Base24Message> {
 

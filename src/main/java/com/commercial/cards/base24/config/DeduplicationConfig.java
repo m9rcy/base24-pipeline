@@ -21,8 +21,16 @@ public class DeduplicationConfig {
         return new FingerprintHasher(objectMapper, hmacSecret);
     }
 
-    @Bean
-    @ConditionalOnMissingBean(DeduplicationService.class)
+    /**
+     * Fallback no-op bean, registered only when no bean named {@code base24DeduplicationService}
+     * exists. When {@code base24.dedupe.enabled=true}, {@link com.commercial.cards.base24.dedupe.Base24JdbcDeduplicationService}
+     * is registered under that name and this bean is skipped.
+     *
+     * <p>Pattern for additional consumers: declare your own {@code @Bean("swiftDeduplicationService")}
+     * and use {@code @Qualifier("swiftDeduplicationService")} in your consumer constructor.</p>
+     */
+    @Bean("base24DeduplicationService")
+    @ConditionalOnMissingBean(name = "base24DeduplicationService")
     public DeduplicationService<Base24Message> noOpBase24DeduplicationService() {
         return new NoOpDeduplicationService<>();
     }

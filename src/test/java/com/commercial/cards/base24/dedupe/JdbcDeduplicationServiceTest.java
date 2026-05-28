@@ -81,6 +81,23 @@ class JdbcDeduplicationServiceTest {
         assertEquals(time(12), lastEventTime("TXN-001"));
     }
 
+    @Test
+    void shouldSkipDuplicateWhenIncomingHasNoTimestamp() {
+        deduplicationService.markProcessed(message("TXN-001", "123.45", time(10)));
+
+        // Same hash, no incoming timestamp — not stale, but still a duplicate
+        assertFalse(deduplicationService.isConsumable(message("TXN-001", "123.45", null)));
+    }
+
+    @Test
+    void shouldAdvanceEventTimeWhenExistingTimestampIsNull() {
+        deduplicationService.markProcessed(message("TXN-001", "123.45", null));
+
+        // Same hash, but incoming has a timestamp and existing doesn't — should update event time
+        assertFalse(deduplicationService.isConsumable(message("TXN-001", "123.45", time(12))));
+        assertEquals(time(12), lastEventTime("TXN-001"));
+    }
+
     private LocalDateTime lastEventTime(String transactionId) {
         return jdbcTemplate.queryForObject("""
                         select last_event_time

@@ -10,6 +10,7 @@ import com.commercial.cards.base24.port.TransactionPort;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.*;
@@ -49,6 +50,11 @@ class TokeniseAndSaveTransactionProcessorTest {
         assertThrows(TokenisationException.class, () -> processor.process(aMessage()));
 
         verifyNoInteractions(transactionPort);
+    }
+
+    @Test
+    void shouldNotSupportNullDto() {
+        assertFalse(processor.supports(null));
     }
 
     @Test

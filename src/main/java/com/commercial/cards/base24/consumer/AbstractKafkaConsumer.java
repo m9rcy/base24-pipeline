@@ -78,6 +78,7 @@ public abstract class AbstractKafkaConsumer<I, D> {
         return Optional.ofNullable(record.headers().lastHeader(TRACE_ID_MDC_KEY))
                 .or(() -> Optional.ofNullable(record.headers().lastHeader("traceId")))
                 .map(Header::value)
+                .filter(value -> value != null && value.length > 0)
                 .map(value -> new String(value, StandardCharsets.UTF_8))
                 .map(String::trim)
                 .filter(value -> !value.isBlank());

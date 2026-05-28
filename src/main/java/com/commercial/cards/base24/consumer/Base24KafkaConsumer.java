@@ -7,6 +7,7 @@ import com.commercial.cards.base24.model.Base24Message;
 import com.commercial.cards.base24.orchestration.EventMapper;
 import com.commercial.cards.base24.orchestration.EventOrchestrator;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.stereotype.Component;
@@ -28,7 +29,7 @@ public class Base24KafkaConsumer extends AbstractKafkaConsumer<String, Base24Mes
 
     public Base24KafkaConsumer(
             EventMapper<String, Base24Message> mapper,
-            DeduplicationService<Base24Message> deduplicationService,
+            @Qualifier("base24DeduplicationService") DeduplicationService<Base24Message> deduplicationService,
             EventOrchestrator<Base24Message> orchestrator
     ) {
         super(mapper, deduplicationService, orchestrator);

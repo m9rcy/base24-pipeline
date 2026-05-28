@@ -10,6 +10,18 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 class ProcessorRoutingOrchestratorTest {
 
     @Test
+    void shouldDoNothingWhenNoProcessorMatchesTheEvent() {
+        TestProcessor unrelated = new TestProcessor("X");
+        TestOrchestrator orchestrator = new TestOrchestrator(
+                List.of(unrelated),
+                ProcessorRoutingMode.SINGLE_MATCH);
+
+        orchestrator.orchestrate(new TestEvent("A")); // "A" != "X" → no match
+
+        assertEquals(0, unrelated.calls);
+    }
+
+    @Test
     void singleMatchShouldProcessOneMatchingProcessorForMadeUpConsumer() {
         TestProcessor matching = new TestProcessor("A");
         TestProcessor other = new TestProcessor("B");

@@ -16,7 +16,10 @@ class MessageFilterTest {
     // No mocks, no Spring — pure unit test
     private final MessageFilter filter = new MessageFilter();
 
-    // ── shouldPublish ───────────────────────────────────────────────────────
+    @Test
+    void shouldReturnFalseWhenMessageIsNull() {
+        assertFalse(filter.shouldPublish(null, MessageFilter.IS_PTLFX));
+    }
 
     @Test
     void shouldPassPtlfxRecords() {
@@ -32,6 +35,17 @@ class MessageFilterTest {
     void shouldRejectNullRecordType() {
         Base24Message msg = Base24Message.builder().recordType(null).build();
         assertFalse(filter.shouldPublish(msg, MessageFilter.IS_PTLFX));
+    }
+
+    @Test
+    void shouldReturnFalseWhenNullMessageIsTestedAgainstActionable() {
+        assertFalse(filter.shouldPublish(null, MessageFilter.IS_ACTIONABLE));
+    }
+
+    @Test
+    void shouldReturnFalseWhenMessageTypeIsNull() {
+        Base24Message msg = Base24Message.builder().build();
+        assertFalse(filter.shouldPublish(msg, MessageFilter.IS_ACTIONABLE));
     }
 
     @ParameterizedTest
@@ -66,7 +80,7 @@ class MessageFilterTest {
         assertFalse(filter.shouldPublish(msg, MessageFilter.IS_PTLFX, MessageFilter.IS_ACTIONABLE));
     }
 
-    // ── Helpers ──────────────────────────────────────────────────────────────
+    // Helpers
 
     private Base24Message messageWith(RecordType recordType) {
         return Base24Message.builder().recordType(recordType).build();
