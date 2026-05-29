@@ -32,42 +32,16 @@ are skipped automatically when Docker is not available.
 
 ### Testcontainers And Docker Desktop
 
-This project uses Testcontainers `2.0.5`. As of 2026-05-28, Maven Central and
-the Testcontainers Java release page list `2.0.5` as the latest version.
-
-Docker Desktop with Docker Engine 29 can fail with older Testcontainers versions.
-The practical 1.x floor reported by the community is `1.21.4`; the project now
-uses `2.0.5`, which also works with Docker Engine 29.
-
-On this workstation, `~/.testcontainers.properties` points at Docker Desktop's
-raw socket:
+This project uses Testcontainers `2.0.5`. Docker Desktop's internal `docker.raw.sock`
+socket cannot be bind-mounted into containers (Ryuk needs this for resource cleanup).
+Use the standard Docker socket instead. Set `~/.testcontainers.properties` to:
 
 ```properties
-docker.host=unix:///Users/m9rcy/Library/Containers/com.docker.docker/Data/docker.raw.sock
+docker.host=unix:///var/run/docker.sock
 ```
 
-That lets the JVM connect to Docker, but Ryuk then tries to mount
-`docker.raw.sock` into its cleanup container and Docker rejects the mount. The
-symptom is:
-
-```text
-error while creating mount source path '.../docker.raw.sock': operation not supported
-```
-
-Use this command when running Testcontainers tests locally:
-
-```bash
-TESTCONTAINERS_RYUK_DISABLED=true \
-TESTCONTAINERS_DOCKER_CLIENT_STRATEGY=org.testcontainers.dockerclient.EnvironmentAndSystemPropertyClientProviderStrategy \
-DOCKER_HOST=unix:///Users/m9rcy/.docker/run/docker.sock \
-TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE=/var/run/docker.sock \
-mvn test -q
-```
-
-References:
-
-- Testcontainers Java Docker Engine 29 issue: https://github.com/testcontainers/testcontainers-java/issues/11235
-- Docker forum note on Testcontainers 1.x and Docker 29: https://forums.docker.com/t/could-not-find-a-valid-docker-environment/151396/2
+On macOS with Docker Desktop, `/var/run/docker.sock` is a symlink to
+`~/.docker/run/docker.sock`, which Docker Desktop exposes correctly.
 
 | Test Class | What it covers |
 |---|---|
@@ -77,7 +51,7 @@ References:
 | `ProcessorRoutingOrchestratorTest` | Single/multi processor routing with a made-up consumer event |
 | `TokeniseAndSaveTransactionProcessorTest` | Tokenise + save processor behavior |
 | `FingerprintHasherTest` | Stable SHA/HMAC hashing |
-| `JdbcDeduplicationServiceTest` | PostgreSQL dedupe, stale event handling, hash changes |
+| `JpaDeduplicationServiceTest` | PostgreSQL dedupe via JPA, stale event handling, hash changes |
 | `Base24KafkaConsumerTest` | Topic-specific consumer retry classification |
 | `TokenisationAdapterTest` | HTTP adapter with MockRestServiceServer |
 | `TransactionAdapterTest` | HTTP adapter with MockRestServiceServer |
@@ -316,9 +290,12 @@ spring:
     url: jdbc:postgresql://your-postgres-host:5432/base24
     username: your-user
     password: your-password
+  flyway:
+    enabled: true
 ```
 
-Then run:
+The schema is applied automatically by Flyway on first startup. No manual DDL
+is required. Then run:
 
 ```bash
 mvn spring-boot:run
@@ -361,13 +338,17 @@ src/main/java/com/commercial/cards/base24/
 │   ├── BaseProcessor.java
 │   ├── ProcessorRoutingMode.java
 │   └── ProcessorRoutingOrchestrator.java
-├── dedupe/                         ← no-op + PostgreSQL-backed dedupe
+├── dedupe/                         ← no-op + JPA-backed dedupe
 │   ├── DeduplicationService.java
 │   ├── NoOpDeduplicationService.java
-│   ├── JdbcDeduplicationService.java
 │   ├── EventFingerprint.java
 │   ├── FingerprintHasher.java
-│   └── Base24EventFingerprint.java
+│   ├── Base24EventFingerprint.java
+│   ├── EventDeduplicationId.java   ← @Embeddable composite PK
+│   ├── EventDeduplicationEntity.java ← @Entity mapping
+│   ├── EventDeduplicationRepository.java ← Spring Data JPA repository
+│   ├── JpaDeduplicationService.java  ← generic JPA-backed implementation
+│   └── Base24JpaDeduplicationService.java ← Base24-specific @Component
 ├── consumer/
 │   ├── AbstractKafkaConsumer.java   ← generic consume/map/dedupe/orchestrate flow
 │   ├── Base24KafkaConsumer.java
@@ -383,7 +364,38 @@ src/main/java/com/commercial/cards/base24/
     ├── RestClientConfig.java
     ├── DeduplicationConfig.java
     └── DedupeDataSourceConfig.java
+
+src/main/resources/
+├── application.yml
+└── db/migration/
+    └── V1__create_event_deduplication.sql   ← Flyway schema migration
 ```
+
+---
+
+## Kafka Consumer Infrastructure
+
+`KafkaConfig` gives every consumer its own `ConsumerFactory`, `DefaultErrorHandler`,
+and `ConcurrentKafkaListenerContainerFactory` bean triple. The three builder helpers
+— `buildConsumerFactory`, `buildErrorHandler`, `buildContainerFactory` — carry all
+the shared defaults and eliminate copy-paste when adding a second consumer. See the
+class-level Javadoc in `KafkaConfig` for the three-step pattern.
+
+Key settings that apply to every consumer:
+
+| Setting | Value | Why |
+|---|---|---|
+| `enable.auto.commit` | `false` | Manual ack — offset only commits after the record is fully processed or the error handler recovers |
+| Ack mode | `MANUAL_IMMEDIATE` | `ack()` commits the offset synchronously rather than batching commits |
+| `auto.offset.reset` | `earliest` | Consumer starts from the beginning of a partition when no committed offset exists |
+| `max.poll.records` | configurable per consumer | Caps how many records Kafka fetches per poll, limiting memory pressure |
+| DLQ naming | `<sourceTopic>.DLQ` if not configured | Each consumer gets an automatically namespaced dead-letter topic |
+
+Retry is exception-driven. Concrete consumers override `isRetriableException` to
+decide which domain exceptions should trigger a Kafka retry. The base class wraps
+retryable exceptions in `KafkaProcessingRetryException`; `DefaultErrorHandler`
+only retries that specific type. All other exceptions bypass retry and go straight
+to the DLQ after the first delivery.
 
 ---
 
@@ -398,9 +410,9 @@ To add a new consumer:
 2. Implement `EventMapper<I, D>` to map the raw Kafka value into that DTO. Return
    `Optional.empty()` for malformed or unsupported input that should be skipped.
 3. Implement `DeduplicationService<D>` if the consumer needs domain-specific
-   duplicate detection. For PostgreSQL-backed dedupe, provide an
-   `EventFingerprint<D>` that exposes the domain, dedupe key, event time, and
-   interesting fields used for hashing.
+   duplicate detection. For JPA-backed dedupe, provide an `EventFingerprint<D>`
+   that exposes the domain, dedupe key, event time, and interesting fields used
+   for hashing.
 4. Implement one or more `EventProcessor<D>` classes. Extend `BaseProcessor<D>`
    when the processor needs a local `shouldProcess(dto)` filter.
 5. Add an `EventOrchestrator<D>`. Prefer `ProcessorRoutingOrchestrator<D>` when
@@ -457,7 +469,7 @@ domain + dedupe_key
 For Base24 transactions:
 
 ```text
-domain = base24-transaction
+domain    = base24-transaction
 dedupe_key = transactionId
 ```
 
@@ -476,9 +488,9 @@ responseCode
 `timestamp` is not part of the hash. It is used only for event ordering:
 
 ```text
-older timestamp than stored last_event_time -> skipped as stale
-same hash with newer timestamp -> skipped and last_event_time is advanced
-changed hash with newer timestamp -> processed
+older timestamp than stored last_event_time  → skipped as stale
+same hash with newer timestamp               → skipped; last_event_time is advanced
+changed hash with newer timestamp            → processed normally
 ```
 
 If `base24.dedupe.hmac-secret` is set, fingerprints are hashed with HMAC-SHA256.
@@ -487,6 +499,125 @@ Otherwise they use SHA-256.
 For multi-instance deployments, producers should set the Kafka message key to
 the dedupe key, usually `transactionId`, so all events for the same transaction
 stay on the same Kafka partition.
+
+### Schema Management
+
+The `event_deduplication` table is created by Flyway on startup.
+The migration lives at:
+
+```
+src/main/resources/db/migration/V1__create_event_deduplication.sql
+```
+
+Flyway is disabled by default (`spring.flyway.enabled=false`). Enable it together
+with `base24.dedupe.enabled=true` when running against a real database. Flyway runs
+before the application context finishes starting, so the table is guaranteed to
+exist before any deduplication check happens.
+
+### JPA Layer
+
+The deduplication store uses Spring Data JPA. Three classes map the
+`event_deduplication` table:
+
+**`EventDeduplicationId`** — the composite primary key:
+
+```java
+@Embeddable          // marks this class as embeddable inside an entity, not a table of its own
+@EqualsAndHashCode   // JPA uses equals/hashCode to track identity in the first-level cache;
+                     // without this, two ID objects with the same values would be treated as different keys
+public class EventDeduplicationId implements Serializable {
+    // Serializable is required by the JPA spec for all primary key classes
+
+    @Column(name = "domain",     nullable = false, length = 100)
+    private String domain;       // maps field to the "domain" column; length constrains DDL generation
+
+    @Column(name = "dedupe_key", nullable = false, length = 255)
+    private String dedupeKey;    // camelCase field → snake_case column via @Column(name = ...)
+}
+```
+
+**`EventDeduplicationEntity`** — the table mapping:
+
+```java
+@Entity              // registers this class with the JPA provider (Hibernate); makes it a managed entity
+@Table(name = "event_deduplication")  // maps to this specific table name; without it Hibernate
+                                      // would look for a table named "event_deduplication_entity"
+public class EventDeduplicationEntity {
+
+    @EmbeddedId      // the primary key is held in an @Embeddable class rather than a single column;
+                     // Hibernate inlines EventDeduplicationId's columns directly into this table
+    private EventDeduplicationId id;
+
+    @Column(name = "hash_version", nullable = false, length = 20)
+    private String hashVersion;
+
+    @Column(name = "last_hash", nullable = false, length = 128)
+    private String lastHash;
+
+    @Column(name = "last_event_time")  // no nullable=false → NULL is allowed; Hibernate generates
+                                       // a nullable column in DDL (Flyway handles the actual DDL)
+    private LocalDateTime lastEventTime;
+
+    @Column(name = "updated_at", nullable = false)
+    private LocalDateTime updatedAt;
+}
+```
+
+**`EventDeduplicationRepository`** — the data access interface:
+
+```java
+// JpaRepository<Entity, ID> provides findById, save, deleteAll, etc. for free
+public interface EventDeduplicationRepository
+        extends JpaRepository<EventDeduplicationEntity, EventDeduplicationId> {
+
+    @Modifying(clearAutomatically = true)
+    // @Modifying marks the query as a write operation (INSERT/UPDATE/DELETE).
+    // clearAutomatically = true flushes and clears Hibernate's first-level cache
+    // after the statement runs, so a subsequent findById reads fresh data from the
+    // database rather than a stale cached version.
+
+    @Query(nativeQuery = true, value = "insert ... on conflict (domain, dedupe_key) do update ...")
+    // nativeQuery = true sends the SQL directly to PostgreSQL without JPQL translation.
+    // This is required here because ON CONFLICT ... DO UPDATE is PostgreSQL-specific syntax
+    // that has no JPQL equivalent. Spring Data would fail to parse it as JPQL.
+
+    void upsert(@Param("domain") String domain, ...);
+    // @Param("domain") binds the method argument to the :domain placeholder in the query string.
+    // Without @Param, Spring Data cannot match positional arguments to named placeholders.
+}
+```
+
+`JpaDeduplicationService` annotates `isConsumable` and `markProcessed` with
+`@Transactional`. This ensures that the `findById` lookup and any subsequent
+`updateEventTime` call within `isConsumable` share the same database connection
+and see each other's changes.
+
+### Auto-Configuration Gate
+
+`spring-boot-starter-data-jpa` ships Hibernate, JPA repositories, Flyway, and
+DataSource auto-configurations. When dedupe is disabled, none of those are needed
+and their eager startup would fail with no database URL configured.
+
+`Base24PipelineApplication` therefore excludes all database-related auto-configurations:
+
+```java
+@SpringBootApplication(exclude = {
+    DataSourceAutoConfiguration.class,
+    DataSourceTransactionManagerAutoConfiguration.class,
+    SqlInitializationAutoConfiguration.class,
+    FlywayAutoConfiguration.class,
+    HibernateJpaAutoConfiguration.class,
+    JpaRepositoriesAutoConfiguration.class
+})
+```
+
+`DedupeDataSourceConfig` re-enables them via `@ImportAutoConfiguration` when
+`base24.dedupe.enabled=true`. `@ImportAutoConfiguration` bypasses the exclusion
+list on `@SpringBootApplication`, so the two mechanisms do not conflict.
+
+`@DataJpaTest` uses the same `@ImportAutoConfiguration` mechanism internally and
+is also unaffected by the exclusions, so the JPA slice tests work without any
+extra configuration.
 
 ---
 

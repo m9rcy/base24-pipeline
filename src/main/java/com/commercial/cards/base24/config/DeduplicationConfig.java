@@ -23,7 +23,7 @@ public class DeduplicationConfig {
 
     /**
      * Fallback no-op bean, registered only when no bean named {@code base24DeduplicationService}
-     * exists. When {@code base24.dedupe.enabled=true}, {@link com.commercial.cards.base24.dedupe.Base24JdbcDeduplicationService}
+     * exists. When {@code base24.dedupe.enabled=true}, {@link com.commercial.cards.base24.dedupe.Base24JpaDeduplicationService}
      * is registered under that name and this bean is skipped.
      *
      * <p>Pattern for additional consumers: declare your own {@code @Bean("swiftDeduplicationService")}

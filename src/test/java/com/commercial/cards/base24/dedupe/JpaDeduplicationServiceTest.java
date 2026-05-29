@@ -6,8 +6,11 @@ import com.commercial.cards.base24.model.RecordType;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.jdbc.datasource.DriverManagerDataSource;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
+import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -15,34 +18,37 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+@DataJpaTest
+@AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
 @Testcontainers(disabledWithoutDocker = true)
-class JdbcDeduplicationServiceTest {
+class JpaDeduplicationServiceTest {
 
     @Container
     static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("postgres:16-alpine");
 
-    private JdbcTemplate jdbcTemplate;
-    private JdbcDeduplicationService<Base24Message> deduplicationService;
+    @DynamicPropertySource
+    static void configureDataSource(DynamicPropertyRegistry registry) {
+        registry.add("spring.datasource.url", POSTGRES::getJdbcUrl);
+        registry.add("spring.datasource.username", POSTGRES::getUsername);
+        registry.add("spring.datasource.password", POSTGRES::getPassword);
+        registry.add("spring.flyway.enabled", () -> "true");
+    }
+
+    @Autowired
+    private EventDeduplicationRepository repository;
+
+    private JpaDeduplicationService<Base24Message> deduplicationService;
 
     @BeforeEach
     void setUp() {
-        DriverManagerDataSource dataSource = new DriverManagerDataSource();
-        dataSource.setUrl(POSTGRES.getJdbcUrl());
-        dataSource.setUsername(POSTGRES.getUsername());
-        dataSource.setPassword(POSTGRES.getPassword());
-
-        jdbcTemplate = new JdbcTemplate(dataSource);
-        jdbcTemplate.execute("drop table if exists event_deduplication");
-
-        deduplicationService = new JdbcDeduplicationService<>(
-                jdbcTemplate,
+        deduplicationService = new JpaDeduplicationService<>(
+                repository,
                 new Base24EventFingerprint(),
                 new FingerprintHasher(new ObjectMapper(), "test-secret"));
-        deduplicationService.initializeSchema();
     }
 
     @Test
@@ -85,7 +91,6 @@ class JdbcDeduplicationServiceTest {
     void shouldSkipDuplicateWhenIncomingHasNoTimestamp() {
         deduplicationService.markProcessed(message("TXN-001", "123.45", time(10)));
 
-        // Same hash, no incoming timestamp — not stale, but still a duplicate
         assertFalse(deduplicationService.isConsumable(message("TXN-001", "123.45", null)));
     }
 
@@ -93,20 +98,14 @@ class JdbcDeduplicationServiceTest {
     void shouldAdvanceEventTimeWhenExistingTimestampIsNull() {
         deduplicationService.markProcessed(message("TXN-001", "123.45", null));
 
-        // Same hash, but incoming has a timestamp and existing doesn't — should update event time
         assertFalse(deduplicationService.isConsumable(message("TXN-001", "123.45", time(12))));
         assertEquals(time(12), lastEventTime("TXN-001"));
     }
 
     private LocalDateTime lastEventTime(String transactionId) {
-        return jdbcTemplate.queryForObject("""
-                        select last_event_time
-                        from event_deduplication
-                        where domain = ? and dedupe_key = ?
-                        """,
-                (rs, rowNum) -> rs.getTimestamp("last_event_time").toLocalDateTime(),
-                Base24EventFingerprint.DOMAIN,
-                transactionId);
+        return repository.findById(new EventDeduplicationId(Base24EventFingerprint.DOMAIN, transactionId))
+                .map(EventDeduplicationEntity::getLastEventTime)
+                .orElseThrow();
     }
 
     private Base24Message message(String transactionId, String amount, LocalDateTime timestamp) {

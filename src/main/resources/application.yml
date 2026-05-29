@@ -5,6 +5,12 @@ spring:
   # that conflicts with our custom one
   kafka:
     bootstrap-servers: ${base24.kafka.bootstrap-servers}
+  jpa:
+    hibernate:
+      ddl-auto: none
+    open-in-view: false
+  flyway:
+    enabled: false
 
 base24:
   kafka:
@@ -28,7 +34,6 @@ base24:
     processor-routing-mode: single-match
   dedupe:
     enabled: false
-    initialize-schema: true
     hmac-secret:
 
 resilience4j:
