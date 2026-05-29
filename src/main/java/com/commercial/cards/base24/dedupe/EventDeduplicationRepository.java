@@ -17,7 +17,7 @@ public interface EventDeduplicationRepository extends JpaRepository<EventDedupli
             do update set
                 hash_version = excluded.hash_version,
                 last_hash = excluded.last_hash,
-                last_event_time = coalesce(excluded.last_event_time, event_deduplication.last_event_time),
+                last_event_time = greatest(excluded.last_event_time, event_deduplication.last_event_time),
                 updated_at = current_timestamp
             """)
     void upsert(
@@ -33,8 +33,9 @@ public interface EventDeduplicationRepository extends JpaRepository<EventDedupli
             update event_deduplication
             set last_event_time = :lastEventTime, updated_at = current_timestamp
             where domain = :domain and dedupe_key = :dedupeKey
+              and (last_event_time is null or last_event_time < :lastEventTime)
             """)
-    void updateEventTime(
+    void advanceEventTimeIfNewer(
             @Param("domain") String domain,
             @Param("dedupeKey") String dedupeKey,
             @Param("lastEventTime") LocalDateTime lastEventTime

@@ -59,6 +59,7 @@ public abstract class AbstractKafkaConsumer<I, D> {
         }
 
         if (!deduplicationService.isConsumable(dto)) {
+            deduplicationService.afterRejected(dto);
             return;
         }
 

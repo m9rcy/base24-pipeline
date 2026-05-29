@@ -73,6 +73,7 @@ class AbstractKafkaConsumerTest {
 
         verify(ack).acknowledge();
         verify(orchestrator, never()).orchestrate(any());
+        verify(deduplicationService).afterRejected(msg);
     }
 
     @Test

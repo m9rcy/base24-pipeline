@@ -5,4 +5,6 @@ public interface DeduplicationService<D> {
     boolean isConsumable(D dto);
 
     void markProcessed(D dto);
+
+    default void afterRejected(D dto) {}
 }

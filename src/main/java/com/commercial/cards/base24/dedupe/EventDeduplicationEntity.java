@@ -30,9 +30,9 @@ public class EventDeduplicationEntity {
     @Column(name = "last_hash", nullable = false, length = 128)
     private String lastHash;
 
-    @Column(name = "last_event_time")
+    @Column(name = "last_event_time", columnDefinition = "TIMESTAMPTZ")
     private LocalDateTime lastEventTime;
 
-    @Column(name = "updated_at", nullable = false)
+    @Column(name = "updated_at", nullable = false, columnDefinition = "TIMESTAMPTZ")
     private LocalDateTime updatedAt;
 }

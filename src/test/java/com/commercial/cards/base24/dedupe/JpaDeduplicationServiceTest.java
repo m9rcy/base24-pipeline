@@ -21,6 +21,7 @@ import java.time.LocalDateTime;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 
 @DataJpaTest
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
@@ -81,9 +82,11 @@ class JpaDeduplicationServiceTest {
 
     @Test
     void shouldAdvanceLastEventTimeForNewerDuplicate() {
+        Base24Message newer = message("TXN-001", "123.45", time(12));
         deduplicationService.markProcessed(message("TXN-001", "123.45", time(10)));
 
-        assertFalse(deduplicationService.isConsumable(message("TXN-001", "123.45", time(12))));
+        assertFalse(deduplicationService.isConsumable(newer));
+        deduplicationService.afterRejected(newer);
         assertEquals(time(12), lastEventTime("TXN-001"));
     }
 
@@ -96,10 +99,37 @@ class JpaDeduplicationServiceTest {
 
     @Test
     void shouldAdvanceEventTimeWhenExistingTimestampIsNull() {
+        Base24Message newer = message("TXN-001", "123.45", time(12));
         deduplicationService.markProcessed(message("TXN-001", "123.45", null));
 
-        assertFalse(deduplicationService.isConsumable(message("TXN-001", "123.45", time(12))));
+        assertFalse(deduplicationService.isConsumable(newer));
+        deduplicationService.afterRejected(newer);
         assertEquals(time(12), lastEventTime("TXN-001"));
+    }
+
+    @Test
+    void shouldReprocessWhenHashVersionMismatches() {
+        EventDeduplicationEntity staleEntity = EventDeduplicationEntity.builder()
+                .id(new EventDeduplicationId(Base24EventFingerprint.DOMAIN, "TXN-001"))
+                .hashVersion("v0")
+                .lastHash("old-hash")
+                .lastEventTime(time(10))
+                .updatedAt(LocalDateTime.now())
+                .build();
+        repository.save(staleEntity);
+
+        assertTrue(deduplicationService.isConsumable(message("TXN-001", "123.45", time(11))));
+    }
+
+    @Test
+    void shouldNotAdvanceEventTimeWhenAfterRejectedCalledWithNoTimestamp() {
+        deduplicationService.markProcessed(message("TXN-001", "123.45", time(10)));
+
+        Base24Message noTimestamp = message("TXN-001", "123.45", null);
+        assertFalse(deduplicationService.isConsumable(noTimestamp));
+        deduplicationService.afterRejected(noTimestamp);
+
+        assertEquals(time(10), lastEventTime("TXN-001"));
     }
 
     private LocalDateTime lastEventTime(String transactionId) {
