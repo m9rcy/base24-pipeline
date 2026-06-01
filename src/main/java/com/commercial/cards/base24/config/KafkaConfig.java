@@ -188,7 +188,12 @@ public class KafkaConfig {
             recoverer.accept(record, exception);
         }, new FixedBackOff(retryIntervalMs, retryMaxAttempts));
 
+        // Only KafkaProcessingRetryException triggers retry; everything else (programming errors,
+        // permanent data failures, unexpected exceptions) goes straight to the DLQ on first delivery.
+        // BinaryExceptionClassifier resolves the most-specific match first, so the explicit
+        // KafkaProcessingRetryException entry wins over the catch-all Exception.class entry.
         errorHandler.addRetryableExceptions(KafkaProcessingRetryException.class);
+        errorHandler.addNotRetryableExceptions(Exception.class);
         errorHandler.setAckAfterHandle(true);
         errorHandler.setCommitRecovered(true);
         errorHandler.setRetryListeners((record, exception, deliveryAttempt) ->

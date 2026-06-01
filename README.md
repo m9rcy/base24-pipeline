@@ -518,14 +518,22 @@ Key settings that apply to every consumer:
 | `enable.auto.commit` | `false` | Manual ack — offset only commits after the record is fully processed or the error handler recovers |
 | Ack mode | `MANUAL_IMMEDIATE` | `ack()` commits the offset synchronously rather than batching commits |
 | `auto.offset.reset` | `earliest` | Consumer starts from the beginning of a partition when no committed offset exists |
-| `max.poll.records` | configurable per consumer | Caps how many records Kafka fetches per poll, limiting memory pressure |
+| `max.poll.records` | configurable per consumer | Caps how many records Kafka fetches per poll. **Must be tuned against `max.poll.interval.ms`** — if processing one full batch (sequential HTTP calls per record) takes longer than `max.poll.interval.ms` (default 300 s), Kafka declares the consumer dead and triggers a rebalance. Lower `max.poll.records` or raise `max.poll.interval.ms` accordingly. |
 | DLQ naming | `<sourceTopic>.DLQ` if not configured | Each consumer gets an automatically namespaced dead-letter topic |
 
 Retry is exception-driven. Concrete consumers override `isRetriableException` to
 decide which domain exceptions should trigger a Kafka retry. The base class wraps
-retryable exceptions in `KafkaProcessingRetryException`; `DefaultErrorHandler`
-only retries that specific type. All other exceptions bypass retry and go straight
-to the DLQ after the first delivery.
+retryable exceptions in `KafkaProcessingRetryException`. `DefaultErrorHandler` is
+configured with `Exception.class` as non-retryable and `KafkaProcessingRetryException`
+as explicitly retryable — Spring Kafka's classifier resolves the most-specific match
+first, so only `KafkaProcessingRetryException` retries; every other exception (programming
+errors, permanent data failures, unexpected runtime exceptions) goes straight to the
+DLQ on first delivery.
+
+> **Why this matters:** Spring Kafka's `DefaultErrorHandler` retries *all* exceptions
+> by default. Without the `addNotRetryableExceptions(Exception.class)` call, a
+> permanent bug or bad record would be retried `maxAttempts` times before being DLQ'd,
+> wasting time and potentially causing repeated downstream side-effects.
 
 ---
 
@@ -581,8 +589,9 @@ and copied by the shared `RestClient` into outgoing HTTP requests as the
 
 Retry is exception-driven. Concrete consumers decide which exceptions are
 retryable; retryable failures are wrapped in `KafkaProcessingRetryException` and
-handled by Spring Kafka's `DefaultErrorHandler`. After retries are exhausted,
-the handler publishes to the configured DLQ and commits the recovered offset.
+retried by Spring Kafka's `DefaultErrorHandler`. All other exception types go
+straight to the DLQ on first delivery. After retries are exhausted, the handler
+publishes to the configured DLQ and commits the recovered offset.
 
 ---
 
@@ -624,17 +633,26 @@ responseCode
 `timestamp` is not part of the hash. It is used only for event ordering:
 
 ```text
-older timestamp than stored last_event_time  → skipped as stale
-same hash with newer timestamp               → skipped; last_event_time is advanced
-changed hash with newer timestamp            → processed normally
+no existing row                                   → processed; row inserted
+hash version changed                              → reprocessed; row updated
+incoming timestamp < stored last_event_time       → skipped as stale
+same hash, incoming timestamp ≥ stored time       → skipped; last_event_time advanced if newer
+different hash, incoming timestamp ≥ stored time  → processed; row updated
 ```
 
 If `base24.dedupe.hmac-secret` is set, fingerprints are hashed with HMAC-SHA256.
 Otherwise they use SHA-256.
 
-For multi-instance deployments, producers should set the Kafka message key to
-the dedupe key, usually `transactionId`, so all events for the same transaction
-stay on the same Kafka partition.
+> **Multi-instance requirement:** Producers **must** set the Kafka message key to the
+> dedupe key (usually `transactionId`) so all events for the same transaction are
+> routed to the same partition and processed by the same consumer instance.
+>
+> `SELECT FOR UPDATE` only locks **existing** rows — it cannot lock a row that does
+> not yet exist. For a brand-new transaction (first occurrence), if two consumer
+> instances processed the same event concurrently, both would see an empty result,
+> both would decide to process, and both would call downstream services. Key-based
+> partitioning eliminates this risk by ensuring only one instance ever sees a given
+> key's events.
 
 ### Atomic Check-and-Write Design
 
@@ -645,8 +663,13 @@ same database transaction before returning.
 
 This matters for retry safety: because the row is committed before `orchestrate()`
 is called, a Kafka retry triggered by a downstream failure (tokenise timeout, save
-error) will find the row already present and skip reprocessing. Without this
-ordering, a retry would see no row and call the downstream service a second time.
+error) will find the row already present and correctly skip reprocessing.
+
+**Limitation — `SELECT FOR UPDATE` does not protect new rows.** When no row exists
+the lock query returns empty and acquires nothing. Two concurrent processors for the
+same key would both see "empty", both decide to process, and both call downstream.
+This is prevented architecturally by key-based Kafka partitioning (see the requirement
+above), not by the database lock itself.
 
 ### Schema Management
 
