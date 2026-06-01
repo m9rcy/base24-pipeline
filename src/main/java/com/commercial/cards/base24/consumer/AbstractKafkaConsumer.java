@@ -59,12 +59,10 @@ public abstract class AbstractKafkaConsumer<I, D> {
         }
 
         if (!deduplicationService.isConsumable(dto)) {
-            deduplicationService.afterRejected(dto);
             return;
         }
 
         orchestrator.orchestrate(dto);
-        deduplicationService.markProcessed(dto);
     }
 
     protected boolean isRetriableException(RuntimeException exception) {

@@ -1,13 +1,20 @@
 package com.commercial.cards.base24.dedupe;
 
+import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.time.LocalDateTime;
+import java.util.Optional;
 
 public interface EventDeduplicationRepository extends JpaRepository<EventDeduplicationEntity, EventDeduplicationId> {
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select e from EventDeduplicationEntity e where e.id = :id")
+    Optional<EventDeduplicationEntity> findByIdWithLock(@Param("id") EventDeduplicationId id);
 
     @Modifying(clearAutomatically = true)
     @Query(nativeQuery = true, value = """

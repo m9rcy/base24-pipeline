@@ -73,7 +73,6 @@ class AbstractKafkaConsumerTest {
 
         verify(ack).acknowledge();
         verify(orchestrator, never()).orchestrate(any());
-        verify(deduplicationService).afterRejected(msg);
     }
 
     @Test
@@ -95,7 +94,6 @@ class AbstractKafkaConsumerTest {
         assertThrows(KafkaProcessingRetryException.class, () -> consumer.consume(aRecord("<xml/>"), ack));
 
         verify(ack, never()).acknowledge();
-        verify(deduplicationService, never()).markProcessed(any());
     }
 
     @Test
@@ -109,13 +107,13 @@ class AbstractKafkaConsumerTest {
     }
 
     @Test
-    void shouldAckSuccessAndMarkProcessedWhenAllStagesPass() {
+    void shouldAckSuccessAndOrchestrateWhenAllStagesPass() {
         Base24Message msg = setupPassingDedupe();
 
         consumer.consume(aRecord("<xml/>"), ack);
 
         verify(ack).acknowledge();
-        verify(deduplicationService).markProcessed(msg);
+        verify(orchestrator).orchestrate(msg);
     }
 
     @Test
@@ -223,17 +221,7 @@ class AbstractKafkaConsumerTest {
         consumer.consume(aRecord("<xml/>"), ack);
 
         verify(ack).acknowledge();
-        verify(deduplicationService).markProcessed(msg);
-    }
-
-    @Test
-    void shouldThrowRetryExceptionWhenMarkProcessedFailsAfterSuccess() {
-        Base24Message msg = setupPassingDedupe();
-        doThrow(new TestRetriableException("db timeout")).when(deduplicationService).markProcessed(msg);
-
-        assertThrows(KafkaProcessingRetryException.class, () -> consumer.consume(aRecord("<xml/>"), ack));
-
-        verify(ack, never()).acknowledge();
+        verify(orchestrator).orchestrate(msg);
     }
 
     private Base24Message setupPassingPreDedupe() {

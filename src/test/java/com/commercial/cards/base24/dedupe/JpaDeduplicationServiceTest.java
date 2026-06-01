@@ -21,7 +21,6 @@ import java.time.LocalDateTime;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
 
 @DataJpaTest
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
@@ -61,49 +60,47 @@ class JpaDeduplicationServiceTest {
     void shouldSkipSameHashAfterSuccessfulProcessing() {
         Base24Message message = message("TXN-001", "123.45", time(10));
 
-        deduplicationService.markProcessed(message);
+        deduplicationService.isConsumable(message); // first call: marks processed, returns true
 
-        assertFalse(deduplicationService.isConsumable(message));
+        assertFalse(deduplicationService.isConsumable(message)); // same hash → skip
     }
 
     @Test
     void shouldConsumeChangedInterestingFields() {
-        deduplicationService.markProcessed(message("TXN-001", "123.45", time(10)));
+        deduplicationService.isConsumable(message("TXN-001", "123.45", time(10)));
 
         assertTrue(deduplicationService.isConsumable(message("TXN-001", "999.00", time(11))));
     }
 
     @Test
     void shouldRejectOlderEventTimeAsStale() {
-        deduplicationService.markProcessed(message("TXN-001", "123.45", time(10)));
+        deduplicationService.isConsumable(message("TXN-001", "123.45", time(10)));
 
         assertFalse(deduplicationService.isConsumable(message("TXN-001", "999.00", time(9))));
     }
 
     @Test
     void shouldAdvanceLastEventTimeForNewerDuplicate() {
-        Base24Message newer = message("TXN-001", "123.45", time(12));
-        deduplicationService.markProcessed(message("TXN-001", "123.45", time(10)));
+        deduplicationService.isConsumable(message("TXN-001", "123.45", time(10)));
 
-        assertFalse(deduplicationService.isConsumable(newer));
-        deduplicationService.afterRejected(newer);
+        // same hash, newer time → skipped, but last_event_time is advanced internally
+        assertFalse(deduplicationService.isConsumable(message("TXN-001", "123.45", time(12))));
         assertEquals(time(12), lastEventTime("TXN-001"));
     }
 
     @Test
     void shouldSkipDuplicateWhenIncomingHasNoTimestamp() {
-        deduplicationService.markProcessed(message("TXN-001", "123.45", time(10)));
+        deduplicationService.isConsumable(message("TXN-001", "123.45", time(10)));
 
         assertFalse(deduplicationService.isConsumable(message("TXN-001", "123.45", null)));
     }
 
     @Test
     void shouldAdvanceEventTimeWhenExistingTimestampIsNull() {
-        Base24Message newer = message("TXN-001", "123.45", time(12));
-        deduplicationService.markProcessed(message("TXN-001", "123.45", null));
+        deduplicationService.isConsumable(message("TXN-001", "123.45", null));
 
-        assertFalse(deduplicationService.isConsumable(newer));
-        deduplicationService.afterRejected(newer);
+        // same hash, existing time=null → not stale, duplicate → skipped, time advanced
+        assertFalse(deduplicationService.isConsumable(message("TXN-001", "123.45", time(12))));
         assertEquals(time(12), lastEventTime("TXN-001"));
     }
 
@@ -122,12 +119,11 @@ class JpaDeduplicationServiceTest {
     }
 
     @Test
-    void shouldNotAdvanceEventTimeWhenAfterRejectedCalledWithNoTimestamp() {
-        deduplicationService.markProcessed(message("TXN-001", "123.45", time(10)));
+    void shouldNotAdvanceEventTimeWhenIncomingHasNoTimestamp() {
+        deduplicationService.isConsumable(message("TXN-001", "123.45", time(10)));
 
-        Base24Message noTimestamp = message("TXN-001", "123.45", null);
-        assertFalse(deduplicationService.isConsumable(noTimestamp));
-        deduplicationService.afterRejected(noTimestamp);
+        // same hash, no incoming timestamp → skipped, time must stay at 10
+        assertFalse(deduplicationService.isConsumable(message("TXN-001", "123.45", null)));
 
         assertEquals(time(10), lastEventTime("TXN-001"));
     }

@@ -9,8 +9,113 @@ types, tokenises the digital PAN via `cards-tokenisation-service`, then saves th
 event via `transactions/save`.
 
 ```
-Kafka Topic → Parse XML → Filter PTLFX + TVN/TCN/ACN → Tokenise DPAN → Save Event
+Kafka Topic → Parse XML → Filter PTLFX + TVN/TCN/ACN → Deduplicate → Tokenise DPAN → Save Event
 ```
+
+---
+
+## Kafka Consumer Flow
+
+```mermaid
+sequenceDiagram
+    participant K  as Kafka
+    participant C  as Base24KafkaConsumer
+    participant A  as AbstractKafkaConsumer
+    participant M  as EventMapper
+    participant F  as MessageFilter (shouldOrchestrate)
+    participant D  as DeduplicationService
+    participant O  as EventOrchestrator
+    participant P  as TokeniseAndSaveProcessor
+    participant T  as TokenisationService
+    participant S  as TransactionService
+
+    K->>C: ConsumerRecord (raw XML)
+    C->>A: consume(record, ack)
+
+    A->>M: map(rawXml)
+    alt cannot map
+        M-->>A: Optional.empty()
+        A->>K: ack.acknowledge()
+    else mapped OK
+        M-->>A: Optional<Base24Message>
+
+        A->>F: shouldOrchestrate(dto)
+        alt not PTLFX or not actionable type
+            F-->>A: false
+            A->>K: ack.acknowledge()
+        else passes filter
+            F-->>A: true
+
+            A->>D: isConsumable(dto)
+            note over D: single @Transactional — check AND write atomically
+            alt duplicate or stale (see Dedup diagram)
+                D-->>A: false
+                A->>K: ack.acknowledge()
+            else new or updated event
+                D-->>A: true (dedup row committed)
+
+                A->>O: orchestrate(dto)
+                O->>P: process(dto)
+                P->>T: tokenise(digitalPan)
+                T-->>P: tokenisedPan
+                P->>S: save(SaveTransactionRequest)
+                S-->>P: 200 OK
+                P-->>O: done
+                O-->>A: done
+
+                A->>K: ack.acknowledge()
+            end
+        end
+    end
+```
+
+---
+
+## Deduplication Decision Flow
+
+```mermaid
+sequenceDiagram
+    participant C  as AbstractKafkaConsumer
+    participant D  as JpaDeduplicationService
+    participant DB as PostgreSQL
+
+    C->>D: isConsumable(dto)
+    note over D,DB: @Transactional — SELECT FOR UPDATE + write in one DB transaction
+
+    D->>DB: SELECT ... FOR UPDATE (domain, dedupe_key)
+
+    alt no existing row
+        DB-->>D: empty — nothing to lock
+        D->>DB: INSERT (hash, version, last_event_time)
+        DB-->>D: row created
+        D-->>C: true → process
+
+    else row exists — hash version changed
+        DB-->>D: row {old_version, old_hash, time}
+        D->>DB: UPDATE (new version, new hash, new time)
+        DB-->>D: updated
+        D-->>C: true → reprocess
+
+    else row exists — incoming time is stale (< stored time)
+        DB-->>D: row {hash, version, stored_time}
+        note over D: incoming is behind stored — skip without advancing time
+        D-->>C: false → skip
+
+    else row exists — same hash, not stale (duplicate with newer/equal time)
+        DB-->>D: row {same_hash, version, stored_time}
+        D->>DB: UPDATE last_event_time if incoming is newer
+        DB-->>D: updated (or no-op if not newer)
+        D-->>C: false → skip
+
+    else row exists — different hash, not stale (genuine update)
+        DB-->>D: row {old_hash, version, stored_time}
+        D->>DB: UPDATE (new hash, GREATEST(incoming_time, stored_time))
+        DB-->>D: updated
+        D-->>C: true → process
+    end
+```
+
+---
 
 ## Prerequisites
 
@@ -58,6 +163,30 @@ On macOS with Docker Desktop, `/var/run/docker.sock` is a symlink to
 | `StubPipelineSmokeTest` | Full pipeline wired with real stubs (no mocks) |
 | `AbstractKafkaIntegrationTest` | Shared Testcontainers Kafka, MockServer, topic, publish, DLQ, and offset helpers |
 | `Base24KafkaIntegrationTest` | Kafka + HTTP end-to-end behavior with Testcontainers |
+| `DeduplicationIntegrationTest` | End-to-end dedup correctness across 5 event rounds at increasing scale (20 → 2 000 transactions) |
+
+### Why `DeduplicationIntegrationTest` Uses a JDK `HttpServer` Instead of MockServer
+
+MockServer is built for **request matching and journaling**: every request it
+receives is logged to an in-memory list so that `verify(request, exactly(N))` can
+scan and count later. That design works well for small volumes but has two
+structural problems at the scale this test exercises (up to 8 000 HTTP calls per
+iteration):
+
+| Problem | Effect on this test |
+|---|---|
+| The request log is unbounded by default | `verify()` scans an ever-growing list; at 4 000+ entries the management API call can exceed RestClient's socket timeout |
+| `maxLogEntries` evicts entries FIFO | Setting it below the total request count (e.g. 5 000 with 8 000 calls) evicts tokenise entries before `verify` runs, reporting 0 matches |
+| `maxSocketTimeout` only covers management calls | It does not affect the stub response time seen by RestClient; slow responses can still cause `TokenisationException` → Kafka retry → double-counted calls |
+
+The dedup integration test only needs **exact call counts** — it does not inspect
+request bodies or simulate error responses. A JDK `HttpServer` serves that need
+with zero overhead:
+
+- No request log — `AtomicInteger` counters updated inline in the handler
+- In-process — no Docker container, no socket, no serialisation round-trip
+- Instant reset between iterations — `counter.set(0)` instead of a management API call
+- No eviction risk — counters accumulate monotonically and are read at assertion time
 
 ---
 
@@ -339,7 +468,7 @@ src/main/java/com/commercial/cards/base24/
 │   ├── ProcessorRoutingMode.java
 │   └── ProcessorRoutingOrchestrator.java
 ├── dedupe/                         ← no-op + JPA-backed dedupe
-│   ├── DeduplicationService.java
+│   ├── DeduplicationService.java   ← single isConsumable(dto): check + write atomically
 │   ├── NoOpDeduplicationService.java
 │   ├── EventFingerprint.java
 │   ├── FingerprintHasher.java
@@ -347,7 +476,7 @@ src/main/java/com/commercial/cards/base24/
 │   ├── EventDeduplicationId.java   ← @Embeddable composite PK
 │   ├── EventDeduplicationEntity.java ← @Entity mapping
 │   ├── EventDeduplicationRepository.java ← Spring Data JPA repository
-│   ├── JpaDeduplicationService.java  ← generic JPA-backed implementation
+│   ├── JpaDeduplicationService.java  ← atomic @Transactional check + SELECT FOR UPDATE + write
 │   └── Base24JpaDeduplicationService.java ← Base24-specific @Component
 ├── consumer/
 │   ├── AbstractKafkaConsumer.java   ← generic consume/map/dedupe/orchestrate flow
@@ -368,7 +497,8 @@ src/main/java/com/commercial/cards/base24/
 src/main/resources/
 ├── application.yml
 └── db/migration/
-    └── V1__create_event_deduplication.sql   ← Flyway schema migration
+    ├── V1__create_event_deduplication.sql
+    └── V2__event_deduplication_timestamptz_and_index.sql
 ```
 
 ---
@@ -433,8 +563,14 @@ To add a new consumer:
 The shared consumer flow is:
 
 ```text
-Kafka record -> mapper -> optional orchestrator pre-filter -> dedupe isConsumable -> orchestrator -> markProcessed -> ack
+Kafka record → mapper → orchestrator pre-filter → dedupe isConsumable (atomic check + write) → orchestrate → ack
 ```
+
+`isConsumable` is the single point of dedup responsibility. It opens one
+`@Transactional` database round-trip that locks the row (`SELECT FOR UPDATE`),
+evaluates the dedup rules, and writes the new state — all before any downstream
+HTTP call is made. This ensures that a Kafka retry after a downstream failure
+will find the row already committed and correctly skip re-processing.
 
 `AbstractKafkaConsumer` also owns trace setup. It reads `trace-id` or `traceId`
 from Kafka headers when present; otherwise it generates a UUID. After mapping,
@@ -500,13 +636,26 @@ For multi-instance deployments, producers should set the Kafka message key to
 the dedupe key, usually `transactionId`, so all events for the same transaction
 stay on the same Kafka partition.
 
+### Atomic Check-and-Write Design
+
+The dedup decision and the write happen inside a **single `@Transactional` method**
+(`JpaDeduplicationService.isConsumable`). The method acquires a `SELECT FOR UPDATE`
+lock on the existing row before evaluating any rule, then writes the outcome in the
+same database transaction before returning.
+
+This matters for retry safety: because the row is committed before `orchestrate()`
+is called, a Kafka retry triggered by a downstream failure (tokenise timeout, save
+error) will find the row already present and skip reprocessing. Without this
+ordering, a retry would see no row and call the downstream service a second time.
+
 ### Schema Management
 
 The `event_deduplication` table is created by Flyway on startup.
-The migration lives at:
+Migrations live at:
 
 ```
 src/main/resources/db/migration/V1__create_event_deduplication.sql
+src/main/resources/db/migration/V2__event_deduplication_timestamptz_and_index.sql
 ```
 
 Flyway is disabled by default (`spring.flyway.enabled=false`). Enable it together
@@ -570,6 +719,12 @@ public class EventDeduplicationEntity {
 public interface EventDeduplicationRepository
         extends JpaRepository<EventDeduplicationEntity, EventDeduplicationId> {
 
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    // Issues SELECT ... FOR UPDATE so no other transaction can modify this row
+    // between the read and the write within the same @Transactional call.
+    @Query("select e from EventDeduplicationEntity e where e.id = :id")
+    Optional<EventDeduplicationEntity> findByIdWithLock(@Param("id") EventDeduplicationId id);
+
     @Modifying(clearAutomatically = true)
     // @Modifying marks the query as a write operation (INSERT/UPDATE/DELETE).
     // clearAutomatically = true flushes and clears Hibernate's first-level cache
@@ -586,11 +741,6 @@ public interface EventDeduplicationRepository
     // Without @Param, Spring Data cannot match positional arguments to named placeholders.
 }
 ```
-
-`JpaDeduplicationService` annotates `isConsumable` and `markProcessed` with
-`@Transactional`. This ensures that the `findById` lookup and any subsequent
-`updateEventTime` call within `isConsumable` share the same database connection
-and see each other's changes.
 
 ### Auto-Configuration Gate
 

@@ -24,15 +24,18 @@ public class JpaDeduplicationService<D> implements DeduplicationService<D> {
     }
 
     @Override
-    @Transactional(readOnly = true)
+    @Transactional
     public boolean isConsumable(D dto) {
         String domain = eventFingerprint.domain();
         String key = eventFingerprint.key(dto);
         String currentHash = currentHash(dto);
         Optional<LocalDateTime> incomingEventTime = eventFingerprint.eventTime(dto);
 
-        Optional<EventDeduplicationEntity> existing = repository.findById(new EventDeduplicationId(domain, key));
+        Optional<EventDeduplicationEntity> existing =
+                repository.findByIdWithLock(new EventDeduplicationId(domain, key));
+
         if (existing.isEmpty()) {
+            repository.upsert(domain, key, eventFingerprint.version(), currentHash, incomingEventTime.orElse(null));
             return true;
         }
 
@@ -41,43 +44,25 @@ public class JpaDeduplicationService<D> implements DeduplicationService<D> {
         if (!row.getHashVersion().equals(eventFingerprint.version())) {
             log.warn("Hash version changed, re-processing [domain={} key={} stored={} current={}]",
                     domain, key, row.getHashVersion(), eventFingerprint.version());
+            repository.upsert(domain, key, eventFingerprint.version(), currentHash, incomingEventTime.orElse(null));
             return true;
         }
 
         if (isStale(incomingEventTime, row.getLastEventTime())) {
             log.info("Skipping stale event [domain={} key={} incomingEventTime={} lastEventTime={}]",
                     domain, key, incomingEventTime.orElse(null), row.getLastEventTime());
+            incomingEventTime.ifPresent(t -> repository.advanceEventTimeIfNewer(domain, key, t));
             return false;
         }
 
         if (currentHash.equals(row.getLastHash())) {
             log.info("Skipping duplicate event [domain={} key={}]", domain, key);
+            incomingEventTime.ifPresent(t -> repository.advanceEventTimeIfNewer(domain, key, t));
             return false;
         }
 
+        repository.upsert(domain, key, eventFingerprint.version(), currentHash, incomingEventTime.orElse(null));
         return true;
-    }
-
-    @Override
-    @Transactional
-    public void markProcessed(D dto) {
-        String domain = eventFingerprint.domain();
-        String key = eventFingerprint.key(dto);
-        String version = eventFingerprint.version();
-        String hash = currentHash(dto);
-        LocalDateTime eventTime = eventFingerprint.eventTime(dto).orElse(null);
-
-        repository.upsert(domain, key, version, hash, eventTime);
-    }
-
-    @Override
-    @Transactional
-    public void afterRejected(D dto) {
-        eventFingerprint.eventTime(dto).ifPresent(incomingTime -> {
-            String domain = eventFingerprint.domain();
-            String key = eventFingerprint.key(dto);
-            repository.advanceEventTimeIfNewer(domain, key, incomingTime);
-        });
     }
 
     private String currentHash(D dto) {

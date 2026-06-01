@@ -6,9 +6,4 @@ public class NoOpDeduplicationService<D> implements DeduplicationService<D> {
     public boolean isConsumable(D dto) {
         return true;
     }
-
-    @Override
-    public void markProcessed(D dto) {
-        // No-op by design.
-    }
 }
