@@ -62,7 +62,7 @@ class Base24EventFingerprintTest {
                 .responseCode(" 00 ")
                 .build());
 
-        assertEquals(new Base24TransactionFingerprint(
+        assertEquals(Base24TransactionFingerprint.of(
                 "TVN",
                 "PTLFX",
                 "TXN-001",
@@ -77,6 +77,6 @@ class Base24EventFingerprintTest {
     void shouldHandleNullFingerprintFields() {
         Object result = fingerprint.fingerprint(Base24Message.builder().build());
 
-        assertEquals(new Base24TransactionFingerprint(null, null, null, null, null, null, null), result);
+        assertEquals(Base24TransactionFingerprint.of(null, null, null, null, null, null, null), result);
     }
 }

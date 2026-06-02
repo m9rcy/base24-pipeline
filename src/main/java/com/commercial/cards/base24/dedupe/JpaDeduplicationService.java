@@ -32,7 +32,7 @@ public class JpaDeduplicationService<D> implements DeduplicationService<D> {
         Optional<LocalDateTime> incomingEventTime = eventFingerprint.eventTime(dto);
 
         Optional<EventDeduplicationEntity> existing =
-                repository.findByIdWithLock(new EventDeduplicationId(domain, key));
+                repository.findByIdWithLock(EventDeduplicationId.of(domain, key));
 
         if (existing.isEmpty()) {
             repository.upsert(domain, key, eventFingerprint.version(), currentHash, incomingEventTime.orElse(null));

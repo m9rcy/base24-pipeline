@@ -35,4 +35,20 @@ public class EventDeduplicationEntity {
 
     @Column(name = "updated_at", nullable = false, columnDefinition = "TIMESTAMPTZ")
     private LocalDateTime updatedAt;
+
+    public static EventDeduplicationEntity of(
+            EventDeduplicationId id,
+            String hashVersion,
+            String lastHash,
+            LocalDateTime lastEventTime,
+            LocalDateTime updatedAt
+    ) {
+        return EventDeduplicationEntity.builder()
+                .id(id)
+                .hashVersion(hashVersion)
+                .lastHash(lastHash)
+                .lastEventTime(lastEventTime)
+                .updatedAt(updatedAt)
+                .build();
+    }
 }

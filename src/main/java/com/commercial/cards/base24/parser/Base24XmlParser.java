@@ -1,8 +1,6 @@
 package com.commercial.cards.base24.parser;
 
 import com.commercial.cards.base24.model.Base24Message;
-import com.commercial.cards.base24.model.MessageType;
-import com.commercial.cards.base24.model.RecordType;
 import com.commercial.cards.base24.model.RtfData;
 import jakarta.xml.bind.JAXBContext;
 import jakarta.xml.bind.JAXBException;
@@ -51,16 +49,10 @@ public class Base24XmlParser {
                     .createUnmarshaller()
                     .unmarshal(new StringReader(xmlFragment));
 
-            Base24Message message = Base24Message.builder()
-                    .messageType(MessageType.from(rtfData.getMessageType()))
-                    .recordType(RecordType.from(rtfData.getRecordType()))
-                    .transactionId(rtfData.getTransactionId())
-                    .digitalPan(rtfData.getDigitalPan())
-                    .amount(parseAmount(rtfData.getAmount()))
-                    .currencyCode(rtfData.getCurrencyCode())
-                    .responseCode(rtfData.getResponseCode())
-                    .timestamp(parseTimestamp(rtfData.getTimestamp()))
-                    .build();
+            Base24Message message = Base24Message.from(
+                    rtfData,
+                    parseAmount(rtfData.getAmount()),
+                    parseTimestamp(rtfData.getTimestamp()));
 
             return Optional.of(message);
 

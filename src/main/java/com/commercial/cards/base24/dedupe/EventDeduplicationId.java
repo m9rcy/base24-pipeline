@@ -21,4 +21,8 @@ public class EventDeduplicationId implements Serializable {
 
     @Column(name = "dedupe_key", nullable = false, length = 255)
     private String dedupeKey;
+
+    public static EventDeduplicationId of(String domain, String dedupeKey) {
+        return new EventDeduplicationId(domain, dedupeKey);
+    }
 }

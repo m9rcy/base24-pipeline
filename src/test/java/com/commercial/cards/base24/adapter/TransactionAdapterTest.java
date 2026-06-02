@@ -77,7 +77,7 @@ class TransactionAdapterTest {
     }
 
     private SaveTransactionRequest aRequest() {
-        return new SaveTransactionRequest(
+        return SaveTransactionRequest.of(
                 "TVN",
                 "TXN-001",
                 "TOK-STUB-1111",

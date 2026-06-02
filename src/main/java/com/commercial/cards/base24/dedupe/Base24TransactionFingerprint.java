@@ -11,4 +11,23 @@ public record Base24TransactionFingerprint(
         String currencyCode,
         String responseCode
 ) {
+    public static Base24TransactionFingerprint of(
+            String messageType,
+            String recordType,
+            String transactionId,
+            String digitalPan,
+            BigDecimal amount,
+            String currencyCode,
+            String responseCode
+    ) {
+        return new Base24TransactionFingerprint(
+                messageType,
+                recordType,
+                transactionId,
+                digitalPan,
+                amount,
+                currencyCode,
+                responseCode
+        );
+    }
 }

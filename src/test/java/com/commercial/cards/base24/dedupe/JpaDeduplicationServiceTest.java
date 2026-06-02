@@ -106,13 +106,12 @@ class JpaDeduplicationServiceTest {
 
     @Test
     void shouldReprocessWhenHashVersionMismatches() {
-        EventDeduplicationEntity staleEntity = EventDeduplicationEntity.builder()
-                .id(new EventDeduplicationId(Base24EventFingerprint.DOMAIN, "TXN-001"))
-                .hashVersion("v0")
-                .lastHash("old-hash")
-                .lastEventTime(time(10))
-                .updatedAt(LocalDateTime.now())
-                .build();
+        EventDeduplicationEntity staleEntity = EventDeduplicationEntity.of(
+                EventDeduplicationId.of(Base24EventFingerprint.DOMAIN, "TXN-001"),
+                "v0",
+                "old-hash",
+                time(10),
+                LocalDateTime.now());
         repository.save(staleEntity);
 
         assertTrue(deduplicationService.isConsumable(message("TXN-001", "123.45", time(11))));
@@ -129,7 +128,7 @@ class JpaDeduplicationServiceTest {
     }
 
     private LocalDateTime lastEventTime(String transactionId) {
-        return repository.findById(new EventDeduplicationId(Base24EventFingerprint.DOMAIN, transactionId))
+        return repository.findById(EventDeduplicationId.of(Base24EventFingerprint.DOMAIN, transactionId))
                 .map(EventDeduplicationEntity::getLastEventTime)
                 .orElseThrow();
     }

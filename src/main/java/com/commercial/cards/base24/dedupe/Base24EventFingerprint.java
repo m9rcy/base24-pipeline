@@ -30,7 +30,7 @@ public class Base24EventFingerprint implements EventFingerprint<Base24Message> {
 
     @Override
     public Object fingerprint(Base24Message dto) {
-        return new Base24TransactionFingerprint(
+        return Base24TransactionFingerprint.of(
                 dto.getMessageType() == null ? null : dto.getMessageType().name(),
                 dto.getRecordType() == null ? null : dto.getRecordType().name(),
                 normalize(dto.getTransactionId()),
