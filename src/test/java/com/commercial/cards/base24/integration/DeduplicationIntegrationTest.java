@@ -33,11 +33,11 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
  * End-to-end deduplication test — parameterised over increasing transaction counts.
- *
+ * <br/>
  * Stubs tokenise and save with an in-process JDK HttpServer and AtomicInteger counters
  * rather than MockServer, eliminating request-log overhead and the socket-timeout issues
  * that MockServer exhibits under high request volumes.
- *
+ * <br/>
  * Per-transaction event sequence (offsets are ordered by round, not interleaved):
  *   round 1 — initial         amount=100.00 ts=T+5  → PROCESSED  (no existing row)
  *   round 2 — stale duplicate amount=100.00 ts=T+3  → SKIPPED    (T+3 < T+5, stale)
@@ -81,7 +81,7 @@ class DeduplicationIntegrationTest extends AbstractKafkaIntegrationTest {
 
         stubServer.setExecutor(Executors.newFixedThreadPool(4));
         stubServer.start();
-        stubServerPort = ((InetSocketAddress) stubServer.getAddress()).getPort();
+        stubServerPort = stubServer.getAddress().getPort();
     }
 
     @AfterAll

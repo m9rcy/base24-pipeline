@@ -1,16 +1,19 @@
 package com.commercial.cards.base24.config;
 
+import com.commercial.cards.base24.consumer.KafkaProcessingRetryException;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.springframework.classify.BinaryExceptionClassifier;
 import org.springframework.kafka.config.ConcurrentKafkaListenerContainerFactory;
 import org.springframework.kafka.core.ConsumerFactory;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.listener.ContainerProperties;
 import org.springframework.kafka.listener.DefaultErrorHandler;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -160,5 +163,20 @@ class KafkaConfigTest {
                 KafkaConfig.resolveDlqTopic("swift-messages", ""));
         assertEquals("override-dlq",
                 KafkaConfig.resolveDlqTopic("any-topic", "override-dlq"));
+    }
+
+    @Test
+    void shouldRetryOnlyKafkaProcessingRetryException() {
+        @SuppressWarnings("unchecked")
+        KafkaTemplate<String, String> template = mock(KafkaTemplate.class);
+
+        DefaultErrorHandler handler = config.buildErrorHandler(template, 1000L, 3L, "");
+        BinaryExceptionClassifier classifier = ReflectionTestUtils.invokeMethod(handler, "getClassifier");
+
+        assertNotNull(classifier);
+        assertEquals(true, classifier.classify(new KafkaProcessingRetryException("retryable")));
+        assertEquals(false, classifier.classify(new IllegalStateException("programming bug")));
+        assertEquals(false, classifier.classify(new RuntimeException("unexpected runtime failure")));
+        assertEquals(false, classifier.classify(new Exception("checked failure")));
     }
 }
